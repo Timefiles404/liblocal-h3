@@ -1,0 +1,1480 @@
+warning: in the working copy of 'src/App.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/canvas/Canvas.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/canvas/factory.ts', LF will be replaced by CRLF the next time Git touches it
+diff --git a/src/App.tsx b/src/App.tsx
+index 13cf1c1..c771a86 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
+ import { Canvas } from '@/canvas/Canvas';
+ import { createInputImageFromDataURL } from '@/canvas/factory';
+ import { Header } from '@/components/Header';
++import { LocalRuntimeBadge, LocalRuntimePanel } from '@/components/LocalRuntimePanel';
+ import { SettingsDrawer } from '@/components/SettingsDrawer';
+ import { Toolbar, type WorkspacePanel } from '@/components/Toolbar';
+ import {
+@@ -15,9 +16,13 @@ import { useLibrary } from '@/store/library';
+ import { loadSnapshot, saveSnapshot } from '@/store/persistence';
+ import { getPref } from '@/store/prefs';
+ import { useVideoTaskRecovery } from '@/hooks/useVideoTaskRecovery';
++import { maybeRunBench } from '@/utils/bench';
+ import { debounce } from '@/utils/debounce';
+ import { fileToDataURL } from '@/utils/image';
+ 
++/** `?bench=N` 为压测模式：不读也不写用户快照，避免测试数据污染存档。 */
++const IS_BENCH = new URLSearchParams(window.location.search).has('bench');
++
+ function isEditableTarget(t: EventTarget | null): boolean {
+   if (!(t instanceof HTMLElement)) return false;
+   const tag = t.tagName;
+@@ -28,6 +33,7 @@ export default function App() {
+   const addNode = useCanvas((s) => s.addNode);
+   const [settingsOpen, setSettingsOpen] = useState(false);
+   const [activePanel, setActivePanel] = useState<WorkspacePanel>(null);
++  const [runtimeOpen, setRuntimeOpen] = useState(false);
+   const historyCount = useHistory((s) => s.entries.length);
+   useVideoTaskRecovery();
+ 
+@@ -37,8 +43,14 @@ export default function App() {
+     void useHistory.getState().hydrate();
+   }, []);
+ 
++  // 压测模式：铺满节点并测帧率，不参与持久化
++  useEffect(() => {
++    if (IS_BENCH) void maybeRunBench();
++  }, []);
++
+   // autosave + hydrate（hydrate 完才订阅，避免空状态覆盖快照）
+   useEffect(() => {
++    if (IS_BENCH) return;
+     let cancelled = false;
+     let unsub: (() => void) | null = null;
+     const save = debounce((state: CanvasState) => {
+@@ -132,8 +144,12 @@ export default function App() {
+         />
+         <main className="relative min-w-0 flex-1">
+           <Canvas />
++          <div className="pointer-events-none absolute left-3 top-3 z-40">
++            <LocalRuntimeBadge onClick={() => setRuntimeOpen((v) => !v)} />
++          </div>
+         </main>
+       </div>
++      {runtimeOpen && <LocalRuntimePanel onClose={() => setRuntimeOpen(false)} />}
+       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+     </div>
+   );
+diff --git a/src/api/images.ts b/src/api/images.ts
+index cb0d683..bc20162 100644
+--- a/src/api/images.ts
++++ b/src/api/images.ts
+@@ -1,5 +1,6 @@
+ import type { ModelDef } from '@/types/model';
+ import { request } from './client';
++import { runLocalImage } from './local-bridge';
+ import { routeRequest, type RouteCtx, type TaskInput } from './model-routing';
+ import { pollTask } from './poll';
+ import { resolveTemplate, type Vars } from './template';
+@@ -28,6 +29,23 @@ export interface GenerateImageOpts {
+ const TASK: TaskInput = { type: 'image' };
+ 
+ export async function generateImage(opts: GenerateImageOpts): Promise<ImageGenResult> {
++  // 本地渠道在此分流：不需要 baseUrl / apiKey，也不经过模板与路由表。
++  // 放在这一层而不是各个调用点，是为了让角色图、场景图、角色卡、分镜等
++  // 所有出图入口一次性获得本地能力。
++  if (opts.model.provider === 'local') {
++    const refs = Array.isArray(opts.vars.imageUrls)
++      ? (opts.vars.imageUrls as unknown[]).filter((u): u is string => typeof u === 'string')
++      : [];
++    const urls = await runLocalImage({
++      model: opts.model,
++      prompt: typeof opts.vars.prompt === 'string' ? opts.vars.prompt : '',
++      referenceImages: refs,
++      ratio: typeof opts.vars.ratio === 'string' ? opts.vars.ratio : undefined,
++      signal: opts.signal,
++    });
++    return { created: Date.now(), dwarning: in the working copy of 'src/api/local-bridge.ts', LF will be replaced by CRLF the next time Git touches it
+ata: urls.map((url) => ({ url })) };
++  }
++
+   const route = routeRequest(TASK, opts.model, opts.ctx);
+   const resolved = resolveTemplate(route.bodyTemplate, opts.vars);
+   const baseUrl = opts.baseUrl.replace(/\/+$/, '');
+diff --git a/src/api/local-bridge.ts b/src/api/local-bridge.ts
+new file mode 100644
+index 0000000..15c8397
+--- /dev/null
++++ b/src/api/local-bridge.ts
+@@ -0,0 +1,137 @@
++/**
++ * 把画布的节点语义翻译成本地 H3 的任务参数。
++ *
++ * 放在单独一层的原因：`useGenerationTrigger` 里已经有大量按云端模型分支的逻辑，
++ * 本地渠道不应该再往里塞第三套。上层只需在入口判断 provider 后调用这里。
++ */
++import type { ModelDef } from '@/types/model';
++import { getAllParameterValues } from '@/utils/modelParams';
++import {
++  firstOutputUrl,
++  runLocal,
++  stageImageForLocal,
++  type LocalGenerateParams,
++  type LocalJob,
++} from './local';
++
++export interface LocalRunContext {
++  model: ModelDef;
++  prompt: string;
++  /** 画布上游连接的参考图（dataURL / blob / http 均可）。 */
++  referenceImages?: string[];
++  ratio?: string;
++  /** 'first-last-frame' 走 fl2va 锚定；其余按 ref2va 参考处理。 */
++  videoMode?: 'first-last-frame' | 'omni-reference';
++  signal?: AbortSignal;
++  onProgress?: (job: LocalJob) => void;
++}
++
++type ParamBag = Record<string, string | number | boolean>;
++
++function readParams(model: ModelDef): ParamBag {
++  if (!model.parameters?.length) return {};
++  return getAllParameterValues(model.id, model.parameters);
++}
++
++function num(bag: ParamBag, key: string): number | undefined {
++  const v = bag[key];
++  if (typeof v === 'number' && Number.isFinite(v)) return v;
++  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
++  return undefined;
++}
++
++function str(bag: ParamBag, key: string): string | undefined {
++  const v = bag[key];
++  return typeof v === 'string' && v ? v : undefined;
++}
++
++function bool(bag: ParamBag, key: string): boolean | undefined {
++  return typeof bag[key] === 'boolean' ? (bag[key] as boolean) : undefined;
++}
++
++/** 把模型参数面板上的值折叠成一次生成请求的公共部分。 */
++function baseParams(model: ModelDef, ratio?: string): Partial<LocalGenerateParams> {
++  const bag = readParams(model);
++  const seed = num(bag, 'seed');
++  return {
++    profile: str(bag, 'profile'),
++    aspect: ratio,
++    steps: num(bag, 'steps'),
++    // 面板上用 -1 表示随机；后端以 null 表示随机。
++    seed: seed === undefined || seed < 0 ? null : seed,
++    sampler: str(bag, 'sampler'),
++    scheduler: str(bag, 'scheduler'),
++    useTurboLora: bool(bag, 'useTurboLora'),
++    loraStrength: num(bag, 'loraStrength'),
++    shiftVideo: num(bag, 'shiftVideo'),
++    shiftAudio: num(bag, 'shiftAudio'),
++  };
++}
++
++async function stageAll(urls: string[], limit: number): Promise<string[]> {
++  const picked = urls.slice(0, limit);
++  return Promise.all(picked.map((u) => stageImageForLocal(u)));
++}
++
++/**
++ * 本地出图。带参考图时走 ref2va，而不是把参考图锚定成首帧——后者取回第 0 帧
++ * 只会得到原图。
++ */
++export async function runLocalImage(ctx: LocalRunContext): Promise<string[]> {
++  const refs = ctx.referenceImages?.length ? await stageAll(ctx.referenceImages, 9) : [];
++  const job = await runLocal({
++    ...baseParams(ctx.model, ctx.ratio),
++    kind: 'image',
++    prompt: ctx.prompt,
++    refImages: refs,
++    signal: ctx.signal,
++    onProgress: ctx.onProgress,
++    label: '出图',
++  });
++  const urls = job.outputs.filter((o) => o.kind === 'image').map((o) => o.url);
++  if (urls.length === 0) {
++    const fallback = firstOutputUrl(job, 'image');
++    if (fallback) return [fallback];
++    throw new Error('本地生成未返回图片');
++  }
++  return urls;
++}
++
++/** 本地出视频（含 H3 的原生音频）。 */
++export async function runLocalVideo(ctx: LocalRunContext): Promise<string> {
++  const bag = readParams(ctx.model);
++  const refsIn = ctx.referenceImages ?? [];
++  const params: Parwarning: in the working copy of 'src/api/local.ts', LF will be replaced by CRLF the next time Git touches it
+tial<LocalGenerateParams> = {
++    ...baseParams(ctx.model, ctx.ratio),
++    length: num(bag, 'length') ?? 124,
++    withAudio: bool(bag, 'withAudio') ?? true,
++  };
++
++  if (ctx.videoMode === 'first-last-frame') {
++    if (refsIn.length < 2) throw new Error('首尾帧模式需要连接至少 2 张参考图');
++    const [first, last] = await stageAll(refsIn.slice(0, 2), 2);
++    params.firstFrame = first;
++    params.lastFrame = last;
++  } else if (refsIn.length === 1) {
++    // 单张参考图按“指定首帧”理解，这是画布上最常见的意图。
++    params.firstFrame = (await stageAll(refsIn, 1))[0];
++  } else if (refsIn.length > 1) {
++    params.refImages = await stageAll(refsIn, 9);
++  }
++
++  const job = await runLocal({
++    ...params,
++    kind: 'video',
++    prompt: ctx.prompt,
++    signal: ctx.signal,
++    onProgress: ctx.onProgress,
++    label: '视频',
++  });
++  const url = firstOutputUrl(job, 'video');
++  if (!url) throw new Error('本地生成未返回视频');
++  return url;
++}
++
++export function isLocalModel(model: ModelDef | undefined | null): boolean {
++  return model?.provider === 'local';
++}
+diff --git a/src/api/local.ts b/src/api/local.ts
+new file mode 100644
+index 0000000..8b7e69c
+--- /dev/null
++++ b/src/api/local.ts
+@@ -0,0 +1,279 @@
++/**
++ * 本地 MiniMax H3 渠道（Liblocal 编排器）。
++ *
++ * 与其它 provider 的区别：不需要任何 API Key 或 base URL 配置。前端由编排器
++ * 自身托管，所以接口一律同源；开发模式下由 vite 代理 `/api` 到编排器。
++ *
++ * 图片走 H3 的“首帧截停”：同一套权重、同一段条件，但只生成最短合法片段
++ * （5 帧，latent_t=2 而不是 37）并取第 0 帧，因此不需要额外的图片模型。
++ */
++
++export type LocalKind = 'image' | 'video';
++
++export interface LocalGenerateParams {
++  kind: LocalKind;
++  prompt: string;
++  /** 档位；显式参数会覆盖档位里的对应项。 */
++  profile?: string;
++  aspect?: string;
++  width?: number;
++  height?: number;
++  /** 帧数（24fps），会被吸附到模型的 17k+5 网格。 */
++  length?: number;
++  steps?: number;
++  seed?: number | null;
++  sampler?: string;
++  scheduler?: string;
++  denoise?: number;
++  shiftVideo?: number;
++  shiftAudio?: number;
++  useTurboLora?: boolean;
++  loraStrength?: number;
++  withAudio?: boolean;
++  fps?: number;
++  /** ComfyUI input 目录内的文件名，由 uploadLocalImage 返回。 */
++  firstFrame?: string;
++  lastFrame?: string;
++  /**
++   * ref2va 参考图（最多 9 张）。与 firstFrame 的区别很关键：参考图只经由文本
++   * 编码器的视觉通路影响生成，不会把任何一帧钉死；提示词中用
++   * `<Picture 1>`、`<Picture 2>` 指代它们。
++   */
++  refImages?: string[];
++  /** match=按输出面积缩放（快）；max=2048 短边，身份保真更好但慢数倍。 */
++  refImageSize?: 'match' | 'max';
++  label?: string;
++}
++
++export interface LocalCost {
++  frameCount: number;
++  latentT: number;
++  audioLatentT: number;
++  durationSec: number;
++  width: number;
++  height: number;
++  videoTokens: number;
++  steps: number;
++  relativeWork: number;
++}
++
++export interface LocalJobOutput {
++  kind: 'image' | 'video' | 'audio' | 'other';
++  filename: string;
++  subfolder: string;
++  url: string;
++}
++
++export interface LocalJob {
++  id: string;
++  kind: LocalKind;
++  route: 't2va' | 'i2va' | 'fl2va' | string;
++  state: 'queued' | 'preparing' | 'running' | 'done' | 'error' | 'cancelled';
++  progress: number;
++  step: number;
++  totalSteps: number;
++  node: string | null;
++  error: string | null;
++  label: string;
++  createdAt: number;
++  startedAt: number | null;
++  finishedAt: number | null;
++  elapsed: number | null;
++  loadSecs: number | null;
++  params: Record<string, unknown>;
++  cost: LocalCost;
++  outputs: LocalJobOutput[];
++}
++
++export interface LocalModelFile {
++  role: string;
++  folder: string;
++  filename: string;
++  required: boolean;
++  present: boolean;
++  sizeGb: number;
++  note: string;
++}
++
++export interface LocalHealth {
++  ok: boolean;
++  version: string;
++  host: {
++    gpu: {
++      name: string;
++      vram_mb: number;
++      vram_gb: number;
++      driver: string;
++      compute_cap: string;
++      is_blackwell: boolean;
++    };
++    ram_gb: number;
++    ram_free_gb: number;
++    cpu_count: number;
++    disk_free_gb: number;
++  };
++  plan: { argv: string[]; notes: string[]; summary: string; tuning: Record<string, unknown> };
++  models: LocalModelFile[];
++  missing: string[];
++  comfy: LocalComfyStatus;
++  paths: { output: string; input: string; logs: string };
++}
++
++export interface LocalComfyStatus {
++  state: 'stopped' | 'starting' | 'ready' | 'stopping' | 'crashed';
++  pid: number | null;
++  port: number;
++  url: string;
++  startedAt: number | null;
++  readyAt: number | null;
++  uptime: number | null;
++  exitCode: number | null;
++  lastError: string | null;
++  restarts: number;
++  rssMb: number | null;
++  tuning: Record<string, unknown> | null;
++}
++
++/** 编排器与前端同源；开发模式由 vite 代理。 */
++const BASE = '';
++
++async function api<T>(path: string, init?: RequestInit): Promise<T> {
++  const res = await fetch(BASE + path, {
++    ...init,
++    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
++  });
++  const text = await res.text();
++  if (!res.ok) {
++    let message = text;
++    try {
++      const parsed = JSON.parse(text) as { error?: string };
++      if (parsed.error) message = parsed.error;
++    } catch {
++      /* 保留原始文本 */
++    }
++    throw new Error(message || `本地服务返回 ${res.status}`);
++  }
++  return (text ? JSON.parse(text) : {}) as T;
++}
++
++export function getLocalHealth(): Promise<LocalHealth> {
++  return api<LocalHealth>('/api/health');
++}
++
++export function getLocalStatus(): Promise<{
++  comfy: LocalComfyStatus;
++  current: LocalJob | null;
++  queued: number;
++  jobs: LocalJob[];
++  modelsLoaded: boolean;
++  idleSecs: number;
++  profiles: Record<string, Record<string, unknown>>;
++  outputDir: string;
++}> {
++  return api('/api/status');
++}
++
++export function startComfy(): Promise<LocalComfyStatus> {
++  return api<LocalComfyStatus>('/api/comfy/start', { method: 'POST' });
++}
++export function stopComfy(): Promise<LocalComfyStatus> {
++  return api<LocalComfyStatus>('/api/comfy/stop', { method: 'POST' });
++}
++export function restartComfy(): Promise<LocalComfyStatus> {
++  return api<LocalComfyStatus>('/api/comfy/restart', { method: 'POST' });
++}
++export function freeComfyVram(): Promise<{ ok: boolean }> {
++  return api('/api/comfy/free', { method: 'POST' });
++}
++export function getComfyLogs(limit = 200): Promise<{
++  logs: Array<{ ts: number; stream: string; text: string }>;
++}> {
++  return api(`/api/comfy/logs?limit=${limit}`);
++}
++
++export function estimateLocal(params: Partial<LocalGenerateParams>): Promise<{
++  cost: LocalCost;
++  route: string;
++}> {
++  return api('/api/estimate', { method: 'POST', body: JSON.stringify(params) });
++}
++
++export function cancelLocalJob(id: string): Promise<{ ok: boolean }> {
++  return api(`/api/jobs/${id}/cancel`, { method: 'POST' });
++}
++
++export function getLocalJob(id: string): Promise<LocalJob> {
++  return api<LocalJob>(`/api/jobs/${id}`);
++}
++
++/** 上传参考图，返回可用作 firstFrame / lastFrame 的文件名。 */
++export async function uploadLocalImage(blob: Blob, filename = 'ref.png'): Promise<string> {
++  const form = new FormData();
++  form.append('image', blob, filename);
++  const res = await fetch(`${BASE}/api/upload`, { method: 'POST', body: form });
++  if (!res.ok) throw new Error(`参考图上传失败：${res.status}`);
++  const data = (await res.json()) as { name: string };
++  return data.name;
++}
++
++/**
++ * 把任意可取到的图片地址（dataURL / blob / http）搬进 ComfyUI 的 input 目录。
++ * 首尾帧必须是本地文件，远端 URL 无法直接交给 LoadImage。
++ */
++export async function stageImageForLocal(url: string): Promise<string> {
++  const res = await fetch(url);
++  if (!res.ok) throw new Error(`读取参考图失败：${res.status}`);
++  const blob = await res.blob();
++  const ext = blob.type.includes('jpeg') ? 'jpg' : blob.type.includes('webp') ? 'webp' : 'png';
++  return uploadLocalImage(blob, `staged-${Date.now()}.${ext}`);
++}
++
++export interface RunLocalOpts extends LocalGenerateParams {
++  signal?: AbortSignal;
++  onProgress?: (job: LocalJob) => void;
++}
++
++const TERMINAL = new Set(['done', 'error', 'cancelled']);
++
++/**
++ * 提交并等待一次本地生成。
++ *
++ * 用轮询而不是 WebSocket：单个任务的生命周期里轮询足够，且不会因为一次断线
++ * 就丢掉正在跑的任务；全局的实时状态由 useLocalRuntime 的 WebSocket 负责。
++ */
++export async function runLocal(opts: RunLocalOpts): Promise<LocalJob> {
++  const { signal, onProgress, ...params } = opts;
++  const job = await api<LocalJob>('/api/generate', {
++    method: 'POST',
++    body: JSON.stringify(params),
++    signal,
++  });
++  onProgress?.(job);
++
++  let current = job;
++  let interval = 700;
++  while (!TERMINAL.has(current.state)) {
++    if (signal?.aborted) {
++      await cancelLocalJob(current.id).catch(() => undefined);
++      throw new DOMException('已取消', 'AbortError');
++    }
++    await new Promise((r) => setTimeout(r, interval));
++    // 采样期间进度变化快，等待权重加载时放慢轮询。
++    interval = current.state === 'running' ? 700 : 1500;
++    try {
++      current = await getLocalJob(current.id);
++      onProgress?.(current);
++    } catch {
++      /* 瞬时错误：下一轮重试，不中断任务 */
++    }
++  }
++
++  if (current.state === 'error') throw new Error(current.error || '本地生成失败');
++  if (current.state === 'cancelled') throw new DOMException('已取消', 'AbortError');
++  return current;
++}
++
++/** 取任务产出中第一个指定类型的文件地址。 */
++export function firstOutputUrl(job: LocalJob, kind: 'image' | 'video'): string | undefined {
++  return job.outputs.find((o) => o.kind === kind)?.url ?? job.outputs[0]?.url;
++}
+diff --git a/src/api/models.ts b/src/api/models.ts
+index 3946c03..d9c62a6 100644
+--- a/src/api/models.ts
++++ b/src/api/models.ts
+@@ -1,6 +1,174 @@
+-import type { ModelDef } from '@/types/model';
++import type { ModelDef, ModelParameter } from '@/types/model';
++
++/** H3 的采样器/调度器取自 ComfyUI 的实际枚举，避免出现无效值。 */
++const SAMPLER_OPTIONS = [
++  { label: 'res_multistep（推荐）', value: 'res_multistep' },
++  { label: 'euler', value: 'euler' },
++  { label: 'dpmpp_2m', value: 'dpmpp_2m' },
++  { label: 'dpmpp_sde', value: 'dpmpp_sde' },
++  { label: 'heun', value: 'heun' },
++  { label: 'uni_pc', value: 'uni_pc' },
++  { label: 'ddim', value: 'ddim' },
++];
++
++const SCHEDULER_OPTIONS = [
++  { label: 'simple（推荐）', value: 'simple' },
++  { label: 'sgm_uniform', value: 'sgm_uniform' },
++  { label: 'karras', value: 'karras' },
++  { label: 'beta', value: 'beta' },
++  { label: 'normal', value: 'normal' },
++  { label: 'exponential', value: 'exponential' },
++];
++
++const PROFILE_OPTIONS = [
++  { label: '草稿 640×352（最快）', value: 'draft' },
++  { label: '标准 864×480', value: 'standard' },
++  { label: '高画质 1344×768', value: 'quality' },
++];
++
++/**
++ * H3 本地生成的通用细节参数。
++ *
++ * 本地部署的意义就在于这些以往被云端 API 藏起来的旋钮可以直接暴露：
++ * turbo LoRA 与步数是绑定的（8 步 LoRA 低于 8 步会掉一致性），
++ * sigma shift 决定视频/音频两路调度的错位量。
++ */
++const H3_COMMON_PARAMS: ModelParameter[] = [
++  {
++    key: 'profile',
++    label: '画质档位',
++    type: 'select',
++    defaultValue: 'standard',
++    options: PROFILE_OPTIONS,
++    description: '决定分辨率基线；下方参数会覆盖档位中的对应项。',
++  },
++  {
++    key: 'steps',
++    label: '采样步数',
++    type: 'number',
++    defaultValue: 8,
++    min: 2,
++    max: 40,
++    step: 1,
++    description: '配合 8 步 turbo LoRA 使用；低于 8 步一致性会下降，关闭 LoRA 后需 25 步以上。',
++  },
++  {
++    key: 'seed',
++    label: '随机种子',
++    type: 'number',
++    defaultValue: -1,
++    min: -1,
++    step: 1,
++    description: '-1 为每次随机。固定种子可在只改提示词时做对照。',
++  },
++  {
++    key: 'sampler',
++    label: '采样器',
++    type: 'select',
++    defaultValue: 'res_multistep',
++    options: SAMPLER_OPTIONS,
++  },
++  {
++    key: 'scheduler',
++    label: '调度器',
++    type: 'select',
++    defaultValue: 'simple',
++    options: SCHEDULER_OPTIONS,
++  },
++  {
++    key: 'useTurboLora',
++    label: '启用 Turbo LoRA',
++    type: 'boolean',
++    defaultValue: true,
++    description: '8 步加速 LoRA。关闭后画质上限更高，但需要数倍时间。',
++  },
++  {
++    key: 'loraStrength',
++    label: 'LoRA 强度',
++    type: 'number',
++    defaultValue: 1,
++    min: 0,
++    max: 1.5,
++    step: 0.05,
++    description: '低于 1 会更接近基础模型风格，但可能需要更多步数。',
++  },
++  {
++    key: 'shiftVideo',
++    label: '视频 sigma shift',
++    type: 'number',
++    defaultValue: 12,
++    min: 1,
++    max: 24,
++    step: 0.5,
++    description: 'H3 默认 12。调高倾向大幅运动，调低更稳但可能偏静。',
++  },
++];
++
++const H3_VIDEO_PARAMS: ModelParameter[] = [
++  ...H3_COMMON_PARAMS,
++  {
++    key: 'length',
++    label: '时长（帧 @24fps）',
++    type: 'select',
++    defaultValue: '124',
++    options: [
++      { label: '2.3 秒 · 56 帧', value: '56' },
++      { label: '3.8 秒 · 90 帧', value: '90' },
++      { label: '5.2 秒 · 124 帧（默认）', value: '124' },
++      { label: '6.6 秒 · 158 帧', value: '158' },
++      { label: '8.0 秒 · 192 帧', value: '192' },
++      { label: '9.4 秒 · 226 帧', value: '226' },
++    ],
++    description: '模型只接受 17k+5 的帧数；训练范围约 124–362 帧，过长未经验证。',
++  },
++  {
++    key: 'withAudio',
++    label: '生成原生音频',
++    type: 'boolean',
++    defaultValue: true,
++    description: 'H3 同时生成画面与配套声音。关闭可省下音频 VAE 的加载与解码。',
++  },
++  {
++    key: 'shiftAudio',
++    label: '音频 sigma shift',
++    type: 'number',
++    defaultValue: 3,
++    min: 0.5,
++    max: 12,
++    step: 0.5,
++    description: 'H3 默认 3，与视频 shift 共同决定两路调度的错位。',
++  },
++];
+ 
+ export const DEFAULT_MODELS: ModelDef[] = [
++  // 本地 MiniMax H3：无需任何 API 配置，开箱即用的默认渠道。
++  {
++    id: 'local-h3-image',
++    name: 'local-h3-image',
++    displayName: 'MiniMax H3 本地 · 出图（首帧截停）',
++    provider: 'local',
++    modality: 'image',
++    supportsEdit: true,
++    ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
++    resolutions: ['640x352', '864x480', '1344x768'],
++    group: 'MiniMax H3（本地）',
++    defaultImageConcurrency: 1,
++    parameters: H3_COMMON_PARAMS,
++  },
++  {
++    id: 'local-h3-video',
++    name: 'local-h3-video',
++    displayName: 'MiniMax H3 本地 · 视频（含原生音频）',
++    provider: 'local',
++    modality: 'video',
++    async: false,
++    durations: ['2.3s', '3.8s', '5.2s', '6.6s', '8s', '9.4s'],
++    ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
++    resolutions: ['640x352', '864x480', '1344x768'],
++    group: 'MiniMax H3（本地）',
++    parameters: H3_VIDEO_PARAMS,
++  },
++
+   // OpenAI 兼容网关（Wan 系列等）
+   {
+     id: 'wan2.7-image',
+diff --git a/src/api/upstream.ts b/src/api/upstream.ts
+index b79c530..fb2e5a0 100644
+--- a/src/api/upstream.ts
++++ b/src/api/upstream.ts
+@@ -8,8 +8,9 @@
+  */
+ export const FIXED_BASE_URL = '';
+ 
+-export const DEFAULT_IMAGE_MODEL = 'wan2.7-image';
++export const DEFAULT_IMAGE_MODEL = 'local-h3-image';
+ export const DEFAULT_IMAGE_MODELS: readonly string[] = [
++  'local-h3-image',
+   'wan2.7-image',
+   'wan2.7-image-pro',
+ ];
+diff --git a/src/canvas/Canvas.tsx b/src/canvas/Canvas.tsx
+index 4bca904..66210b0 100644
+--- a/src/canvas/Canvas.tsx
++++ b/src/canvas/Canvas.tsx
+@@ -22,6 +22,7 @@ import { Copy, Info, MessageSquare, Play, Trash2, X } from 'lucide-react';
+ import {
+   type ComponentType,
+   type ReactNode,
++  memo,
+   useCallback,
+   useEffect,warning: in the working copy of 'src/canvas/useFlowNodes.ts', LF will be replaced by CRLF the next time Git touches it
+
+   useMemo,
+@@ -29,6 +30,7 @@ import {
+   useState,
+ } from 'react';
+ import { createInputImageFromDataURL, createNode } from '@/canvas/factory';
++import { useFlowNodes } from '@/canvas/useFlowNodes';
+ import {
+   FEATURE_DISABLED_MESSAGE,
+   isNodeFeatureEnabled,
+@@ -64,7 +66,10 @@ import { ChatNodeComp } from './nodes/ChatNode';
+ import { StoryboardViewerNodeComp } from './nodes/StoryboardViewerNode';
+ 
+ function withNodeChrome(Component: ComponentType<any>) {
+-  return function NodeChrome(props: any) {
++  // memo 是这里的关键：React Flow 会在自身状态变动时重新渲染所有已挂载的节点，
++  // 而节点内部往往挂着图片/视频。没有 memo 时，100 个节点里任何一个更新都会
++  // 让另外 99 个一起重绘。
++  return memo(function NodeChrome(props: any) {
+     const id = props.id as NodeId;
+     const selectedIds = useCanvas((s) => s.selectedIds);
+     const node = useCanvas((s) => s.nodes.find((item) => item.id === id));
+@@ -149,7 +154,7 @@ function withNodeChrome(Component: ComponentType<any>) {
+         )}
+       </div>
+     );
+-  };
++  });
+ }
+ 
+ function NodeHoverToolbar({
+@@ -397,20 +402,6 @@ type ContextMenuState =
+   | { type: 'edge'; x: number; y: number; edgeId: string }
+   | null;
+ 
+-function toFlowNode(n: AppNode, connectHoverTargetId: NodeId | null): RFNode {
+-  const selected = useCanvas.getState().selectedIds.includes(n.id);
+-  return {
+-    id: n.id,
+-    type: n.kind,
+-    position: { x: n.x, y: n.y },
+-    data: {},
+-    width: n.width,
+-    height: n.height,
+-    selected,
+-    className: n.id === connectHoverTargetId ? 'canvas-node-connect-hover' : undefined,
+-  };
+-}
+-
+ function toFlowEdge(e: AppEdge, selectedEdgeId: string | null): RFEdge {
+   const selected = e.id === selectedEdgeId;
+   return {
+@@ -487,10 +478,7 @@ export function Canvas() {
+   const connectionSourceIdRef = useRef<NodeId | null>(null);
+   const suppressNextCanvasClickRef = useRef(false);
+ 
+-  const flowNodes = useMemo(
+-    () => nodes.map((node) => toFlowNode(node, connectHoverTargetId)),
+-    [nodes, selectedIds, connectHoverTargetId],
+-  );
++  const flowNodes = useFlowNodes(nodes, selectedIds, connectHoverTargetId);
+   const flowEdges = useMemo(
+     () => edges.map((edge) => toFlowEdge(edge, selectedEdgeId)),
+     [edges, selectedEdgeId],
+@@ -888,11 +876,19 @@ export function Canvas() {
+         onPaneClick={onPaneClick}
+         onMoveStart={closeMenu}
+         fitView
++        // 视口裁剪：只挂载可见节点。百节点画布上这是最大的一笔收益——
++        // 屏幕外的图片/视频节点根本不会进入 DOM。
++        onlyRenderVisibleElements
+         proOptions={{ hideAttribution: true }}
+       >
+         <Background gap={48} size={1} color="#d9d6cf" />
+         <Controls position="bottom-right" />
+-        <MiniMap pannable zoomable position="top-right" />
++        {/* 小地图按节点数量绘制矩形；节点很多时关掉交互可省下大量重排。 */}
++        <MiniMap
++          pannable={nodes.length <= 120}
++          zoomable={nodes.length <= 120}
++          position="top-right"
++        />
+       </ReactFlow>
+       {menu?.type === 'pane' && (
+         <ContextMenu x={menu.x} y={menu.y}>
+diff --git a/src/canvas/factory.ts b/src/canvas/factory.ts
+index b3bdd31..2d9b73c 100644
+--- a/src/canvas/factory.ts
++++ b/src/canvas/factory.ts
+@@ -2,7 +2,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/api/upstream';
+ import { nodeId } from '@/utils/id';
+ import type { AppNode, NodeKind } from '@/types/node';
+ 
+-const DEFAULT_VIDEO_MODEL = 'wan2.6-r2v-flash';
++const DEFAULT_VIDEO_MODEL = 'local-h3-video';
+ const DEFAULT_CHAT_MODEL = 'gpt-4o';
+ const DEFAULT_STORYBOARD_LLM = 'MiniMax-M2.5';
+ 
+diff --git a/src/canvas/useFlowNodes.ts b/src/canvas/useFlowNodes.ts
+new file mode 100644
+index 0000000..4c7d495
+--- /dev/null
++++ b/src/canvas/useFlowNodes.ts
+@@ -0,0 +1,64 @@
++/**
++ * 把画布节点转换成 React Flow 节点，并保持未变化节点的对象引用不变。
++ *
++ * 原实现每次都 `nodes.map(toFlowNode)` 重新构造全部对象。storwarning: in the working copy of 'src/components/LocalRuntimePanel.tsx', LF will be replaced by CRLF the next time Git touches it
+e 用的是 immer，
++ * 未改动的节点本身引用是稳定的，但这一步会把这份稳定性丢掉：任何一次改动
++ * （哪怕只是某个节点的进度百分比）都会让 React Flow 看到 100 个全新对象，
++ * 从而更新全部内部节点状态并重渲染所有节点外壳。
++ *
++ * 这里按节点 id 缓存产物，只有当源节点引用、选中态、连线悬停态之一真的变化时
++ * 才重建那一个对象。
++ */
++import { useMemo, useRef } from 'react';
++import type { Node as RFNode } from '@xyflow/react';
++
++import type { AppNode, NodeId } from '@/types/node';
++
++interface CacheEntry {
++  src: AppNode;
++  selected: boolean;
++  hovered: boolean;
++  out: RFNode;
++}
++
++export function useFlowNodes(
++  nodes: AppNode[],
++  selectedIds: NodeId[],
++  connectHoverTargetId: NodeId | null,
++): RFNode[] {
++  const cache = useRef(new Map<NodeId, CacheEntry>());
++
++  return useMemo(() => {
++    const selected = new Set<NodeId>(selectedIds);
++    const next = new Map<NodeId, CacheEntry>();
++    const out: RFNode[] = [];
++
++    for (const n of nodes) {
++      const isSelected = selected.has(n.id);
++      const isHovered = n.id === connectHoverTargetId;
++      const prev = cache.current.get(n.id);
++
++      if (prev && prev.src === n && prev.selected === isSelected && prev.hovered === isHovered) {
++        next.set(n.id, prev);
++        out.push(prev.out);
++        continue;
++      }
++
++      const flow: RFNode = {
++        id: n.id,
++        type: n.kind,
++        position: { x: n.x, y: n.y },
++        data: {},
++        width: n.width,
++        height: n.height,
++        selected: isSelected,
++        className: isHovered ? 'canvas-node-connect-hover' : undefined,
++      };
++      next.set(n.id, { src: n, selected: isSelected, hovered: isHovered, out: flow });
++      out.push(flow);
++    }
++
++    cache.current = next; // 顺带丢弃已删除节点的缓存
++    return out;
++  }, [nodes, selectedIds, connectHoverTargetId]);
++}
+diff --git a/src/components/LocalRuntimePanel.tsx b/src/components/LocalRuntimePanel.tsx
+new file mode 100644
+index 0000000..4bbff53
+--- /dev/null
++++ b/src/components/LocalRuntimePanel.tsx
+@@ -0,0 +1,324 @@
++/**
++ * 本地运行时面板：把 ComfyUI 的进程状态、显存占用和当前任务摊开给用户。
++ *
++ * 存在的理由是“小白可用”：本地生成的失败大多来自进程没起来、显存不够或模型
++ * 缺文件，而这些在云端 API 模式下是不存在的概念。与其让用户去读控制台，
++ * 不如把状态和一两个可操作的按钮放在界面里。
++ */
++import { Activity, CircleStop, Play, RefreshCw, Trash2, X } from 'lucide-react';
++import { useCallback, useEffect, useRef, useState } from 'react';
++
++import {
++  freeComfyVram,
++  getComfyLogs,
++  getLocalHealth,
++  getLocalStatus,
++  restartComfy,
++  startComfy,
++  stopComfy,
++  type LocalComfyStatus,
++  type LocalHealth,
++  type LocalJob,
++} from '@/api/local';
++
++const STATE_LABEL: Record<LocalComfyStatus['state'], string> = {
++  stopped: '未启动',
++  starting: '启动中',
++  ready: '就绪',
++  stopping: '停止中',
++  crashed: '已崩溃',
++};
++
++const STATE_TONE: Record<LocalComfyStatus['state'], string> = {
++  stopped: 'bg-zinc-300',
++  starting: 'bg-amber-400 animate-pulse',
++  ready: 'bg-emerald-500',
++  stopping: 'bg-amber-400 animate-pulse',
++  crashed: 'bg-red-500',
++};
++
++function fmtDuration(secs: number | null | undefined): string {
++  if (!secs || secs < 0) return '—';
++  if (secs < 60) return `${secs.toFixed(0)} 秒`;
++  const m = Math.floor(secs / 60);
++  return `${m} 分 ${Math.round(secs - m * 60)} 秒`;
++}
++
++/**
++ * 常驻状态徽章。本地生成最常见的困惑是“点了生成，但什么也没发生”——
++ * 其实是 ComfyUI 正在冷启动或加载 28GB 权重。把状态一直摆在画布角上，
++ * 用户不必猜。
++ */
++export function LocalRuntimeBadge({ onClick }: { onClick: () => void }) {
++  const [comfy, setComfy] = useState<LocalComfyStatus | null>(null);
++  const [current, setCurrent] = useState<LocalJob | null>(null);
++  const [reachable, setReachable] = useState(true);
++
++  useEffect(() => {
++    let alive = true;
++    const pull = async () => {
++      try {
++        const s = await getLocalStatus();
++        if (!alive) return;
++        setComfy(s.comfy);
++        setCurrent(s.current);
++        setReachable(true);
++      } catch {
++        if (alive) setReachable(false);
++      }
++    };
++    void pull();
++    const t = window.setInterval(pull, 3000);
++    return () => {
++      alive = false;
++      window.clearInterval(t);
++    };
++  }, []);
++
++  if (!reachable) {
++    return (
++      <button
++        type="button"
++        onClick={onClick}
++        className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-red-200 bg-white/95 px-3 py-1.5 text-[12px] font-medium text-red-600 shadow-sm backdrop-blur"
++      >
++        <span className="h-2 w-2 rounded-full bg-red-500" />
++        本地服务未连接
++      </button>
++    );
++  }
++
++  const label = current
++    ? current.state === 'preparing'
++      ? '加载模型…'
++      : `生成中 ${current.step}/${current.totalSteps}`
++    : comfy
++      ? `本地引擎 ${STATE_LABEL[comfy.state]}`
++      : '本地引擎 …';
++
++  return (
++    <button
++      type="button"
++      onClick={onClick}
++      title="查看本地运行时状态"
++      className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white/95 px-3 py-1.5 text-[12px] font-medium text-zinc-700 shadow-sm backdrop-blur hover:bg-white"
++    >
++      <span className={`h-2 w-2 rounded-full ${comfy ? STATE_TONE[comfy.state] : 'bg-zinc-300'}`} />
++      {label}
++    </button>
++  );
++}
++
++export function LocalRuntimePanel({ onClose }: { onClose: () => void }) {
++  const [health, setHealth] = useState<LocalHealth | null>(null);
++  const [comfy, setComfy] = useState<LocalComfyStatus | null>(null);
++  const [current, setCurrent] = useState<LocalJob | null>(null);
++  const [queued, setQueued] = useState(0);
++  const [logs, setLogs] = useState<string[]>([]);
++  const [showLogs, setShowLogs] = useState(false);
++  const [busy, setBusy] = useState<string | null>(null);
++  const [error, setError] = useState<string | null>(null);
++  const logRef = useRef<HTMLDivElement | null>(null);
++
++  const refresh = useCallback(async () => {
++    try {
++      const s = await getLocalStatus();
++      setComfy(s.comfy);
++      setCurrent(s.current);
++      setQueued(s.queued);
++      setError(null);
++    } catch (e) {
++      setError(e instanceof Error ? e.message : String(e));
++    }
++  }, []);
++
++  useEffect(() => {
++    getLocalHealth().then(setHealth).catch(() => undefined);
++    void refresh();
++    // 轮询而不是长连接：这个面板通常只开几秒，2 秒一次已经够灵敏。
++    const t = window.setInterval(refresh, 2000);
++    return () => window.clearInterval(t);
++  }, [refresh]);
++
++  useEffect(() => {
++    if (!showLogs) return;
++    let alive = true;
++    const pull = () =>
++      getComfyLogs(200)
++        .then((r) => {
++          if (alive) setLogs(r.logs.map((l) => l.text));
++        })
++        .catch(() => undefined);
++    void pull();
++    const t = window.setInterval(pull, 2000);
++    return () => {
++      alive = false;
++      window.clearInterval(t);
++    };
++  }, [showLogs]);
++
++  useEffect(() => {
++    if (showLogs && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
++  }, [logs, showLogs]);
++
++  const act = async (name: string, fn: () => Promise<unknown>) => {
++    setBusy(name);
++    setError(null);
++    try {
++      await fn();
++      await refresh();
++    } catch (e) {
++      setError(e instanceof Error ? e.message : String(e));
++    } finally {
++      setBusy(null);
++    }
++  };
++
++  const gpu = health?.host.gpu;
++  const missing = health?.missing ?? [];
++
++  return (
++    <div className="fixed right-4 top-16 z-50 w-[380px] rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_20px_60px_rgba(15,23,42,0.18)]">
++      <div className="mb-3 flex items-center justify-between">
++        <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
++          <Activity className="h-4 w-4" />
++          本地运行时
++        </div>
++        <button
++          type="button"
++          onClick={onClose}
++          className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
++          aria-label="关闭"
++        >
++          <X className="h-4 w-4" />
++        </button>
++      </div>
++
++      <div className="mb-3 flex items-center gap-2 rounded-lg bg-zinc-50 px-3 py-2 text-[13px]">
++        <span className={`h-2.5 w-2.5 rounded-full ${comfy ? STATE_TONE[comfy.state] : 'bg-zinc-300'}`} />
++        <span className="font-medium text-zinc-700">
++          ComfyUI {comfy ? STATE_LABEL[comfy.state] : '…'}
++        </span>
++        {comfy?.pid && <span className="text-zinc-400">PID {comfy.pid}</span>}
++        {comfy?.rssMb != null && (
++          <span className="ml-auto text-zinc-500">{(comfy.rssMb / 1024).toFixed(1)} GB 内存</span>
++        )}
++      </div>
++
++      {gpu && (
++        <div className="mb-3 space-y-1 text-[12px] text-zinc-600">
++          <div>
++            {gpu.name} · {gpu.vram_gb.toFixed(1)} GB 显存 · 驱动 {gpu.driver}
++          </div>
++          {health?.plan.notes.map((n) => (
++            <div key={n} className="rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
++              {n}
++            </div>
++          ))}
++        </div>
++      )}
++
++      {missing.length > 0 && (
++        <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">
++          缺少模型：{missing.join('、')}
++        </div>
++      )}
++
++      {current && (
++        <div className="mb-3 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-[12px]">
++          <div className="flex items-center justify-between font-medium text-blue-900">
++            <span>
++              正在{current.kind === 'video' ? '生成视频' : '出图'} · {current.route}
++            </span>
++            <span>
++              {current.state === 'preparing' ? '加载模型…' : `${current.step}/${current.totalSteps}`}
++            </span>
++          </div>
++          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-blue-100">
++            <div
++              className="h-full rounded-full bg-blue-500 transition-[width]"
++              style={{ width: `${Math.max(3, current.progress * 100)}%` }}
++            />
++          </div>
++          <div className="mt-1 flex justify-between text-[11px] text-blue-700/80">
++            <span>已用 {fmtDuration(current.elapsed)}</span>
++            {current.loadSecs != null && <span>加载 {fmtDuration(current.loadSecs)}</span>}
++          </div>
++        </div>
++      )}
++
++      {queued > 0 && (
++        <div className="mb-3 text-[12px] text-zinc-500">队列中还有 {queued} 个任务</div>
++      )}
++
++      {error && (
++        <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">{error}</div>
++      )}
++      {comfy?.lastError && comfy.state === 'crashed' && (
++        <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">
++          {comfy.lastError}
++        </div>
++      )}
++
++      <div className="flex flex-wrap gap-2">
++        <button
++          type="button"
++          disabled={busy !== null || comfy?.state === 'ready' || comfy?.state === 'starting'}
++          onClick={() => act('start', startComfy)}
++          className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
++        >
++          <Play className="h-3.5 w-3.5" /> 启动
++        </button>
++        <button
++          type="button"
++          disabled={busy !== null || comfy?.state === 'stopped'}
++          onClick={() => act('stop', stopComfy)}
++          className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
++        >
++          <CircleStop className="h-3.5 w-3.5" /> 停止
++        </button>
++        <button
++          type="button"
++          disabled={busy !== null}
++          onClick={() => act('restart', restartComfy)}
++          className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
++        >
++          <RefreshCw className="h-3.5 w-3.5" /> 重启
++        </button>
++        <button
++          type="button"
++          disabled={busy !== null || comfy?.state !== 'ready'}
++          onClick={() => act('free', freeComfyVram)}
++          title="卸载模型、把显存还给系统；下次生成会重新加载"
++          className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
++        >
++          <Trash2 className="h-3.5 w-3.5" /> 释放显存
++        </button>
++        <button
++          type="button"
++          onClick={() => setShowLogs((v) => !v)}
++          className="ml-auto rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-zinc-500 hover:bg-zinc-50"
++        >
++          {showLogs ? '隐藏日志' : '查看日志'}
++        </button>
++      </div>
++
++      {showLogs && (
++        <div
++          ref={logRef}
++          className="mt-3 max-h-56 overflow-auto rounded-lg bg-zinc-900 p-2 font-mono text-[10.5px] leading-relaxed text-zinc-300"
++        >
++          {logs.length === 0 ? (
++            <div className="text-zinc-500">暂无日志</div>
++          ) : (
++            logs.map((l, i) => (
++              <div key={`${i}-${l.slice(0, 24)}`} className="whitespace-pre-wrap break-all">
++                {l}
++              </div>
++            ))
++          )}
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/src/hooks/useGenerationTrigger.ts b/src/hooks/useGenerationTrigger.ts
+index 8a2b367..523981f 100644
+--- a/src/hooks/useGenerationTrigger.ts
++++ b/src/hooks/useGenerationTrigger.ts
+@@ -1,6 +1,7 @@
+ import { useCallback } from 'react';
+ import { chatComplete, type ChatContent } from '@/api/chat';
+ import { generateImage } from '@/api/images';
++import { runLocalVideo } from '@/api/local-bridge';
+ import {
+   fetchImageMaterialBlob,
+   importImageUrlMaterial,
+@@ -428,6 +429,12 @@ const IMAGE_RESULT_NODE_KINDS = new Set<NodeKind>([
+ type HistoryDraft = Omit<HistoryEntry, 'id' | 'timestamp'>;
+ 
+ function loadRuntime(model?: ModelDef): { apiKey: string; baseUrl: string } {
++  // 本地渠道由编排器同源提供，没有凭据可言；必须在缺少全局 Key 的回退分支
++  // 抛错之前短路，否则“开箱即用”在没配过任何服务商的机器上会直接失败。
++  if (model?.provider === 'local') {
++    return { apiKey: '', baseUrl: '' };
++  }
++
+   // 如果提供了模型，尝试从模型的服务商配置中读取
+   if (model) {
+     const providerConfig = resolveProviderConfig(model);
+@@ -656,6 +663,32 @@ async function runVideoGen(
+   const finalPrompt = upstream.prompt || node.settings.videoPrompt;
+   if (!finalPrompt) throw new Error('video prompt 为空');
+ 
++  // 本地 H3：在云端模型的分支逻辑之前分流，避免把第三套规则塞进下面的判断链。
++  if (model.provider === 'local') {
++    const url = await runLocalVideo({
++      model,
++      prompt: finalPrompt,
++      referenceImages: upstream.referenceImages,
++      ratio: node.settings.ratio,
++      videoMode: node.settings.videoMode ?? 'omni-reference',
++      // 画布上的 progress 是百分比，本地任务给的是 0..1。
++      onProgress: (job) =>
++        useCanvas
++          .getState()
++          .patchSettings<'gen-video'>(node.id, { progress: Math.round(job.progress * 100) }),
++    });
++    useCanvas.getState().patchSettings<'gen-video'>(node.id, { progress: 100 });
++    patch(node.id, { content: url });
++    return {
++      kind: 'video',
++      model: model.id,
++      prompt: finalPrompt,
++      contentUrl: url,
++      sizeDesc: `本地 H3 · ${node.settings.ratio ?? '16:9'}`,
++      refsCount: upstream.referenceImages.length,
++    };
++  }warning: in the working copy of 'src/utils/bench.ts', LF will be replaced by CRLF the next time Git touches it
+
++
+   const ctx = {
+     hasReferenceImages: upstream.referenceImages.length > 0 || upstream.audioUrls.length > 0,
+     hasMask: false,
+diff --git a/src/hooks/useModels.ts b/src/hooks/useModels.ts
+index 2e41060..64437c3 100644
+--- a/src/hooks/useModels.ts
++++ b/src/hooks/useModels.ts
+@@ -21,7 +21,14 @@ export function useModels(modality?: Modality): ModelDef[] {
+     const visible = all.filter((m) => !m.hidden);
+     const filtered = modality ? visible.filter((m) => m.modality === modality) : visible;
+     if (modality === 'image') {
+-      return filtered.filter((m) => DEFAULT_IMAGE_MODELS.includes(m.id));
++      // 原逻辑只允许白名单里的图片模型出现——这会把用户自己添加的外部图片模型
++      // 和本地模型都过滤掉。改为：白名单里的 + local provider 的 + 用户添加的。
++      return filtered.filter(
++        (m) =>
++          DEFAULT_IMAGE_MODELS.includes(m.id) ||
++          m.provider === 'local' ||
++          userModels.some((u) => u.id === m.id),
++      );
+     }
+     if (modality === 'video') {
+       return [...filtered].sort((a, b) => videoModelPriority(a) - videoModelPriority(b));
+@@ -31,6 +38,8 @@ export function useModels(modality?: Modality): ModelDef[] {
+ }
+ 
+ function videoModelPriority(model: ModelDef): number {
++  // 本地模型始终排在最前面——它是零配置可用的默认渠道。
++  if (model.provider === 'local') return -1;
+   const haystack = `${model.id} ${model.name} ${model.group ?? ''}`.toLowerCase();
+   if (haystack.includes('happyhorse')) return 0;
+   if (haystack.includes('kling')) return 1;
+diff --git a/src/types/model.ts b/src/types/model.ts
+index f5c5409..4147130 100644
+--- a/src/types/model.ts
++++ b/src/types/model.ts
+@@ -1,6 +1,8 @@
+ import type { ProviderAssignment } from './provider';
+ 
+ export type Provider =
++  /** 本地 MiniMax H3（Liblocal 编排器），无需任何 API 配置。 */
++  | 'local'
+   | 'openai'
+   | 'jimeng'
+   | 'midjourney'
+@@ -9,6 +11,11 @@ export type Provider =
+   | 'yunwu'
+   | 'custom';
+ 
++/** 本地渠道不需要 Key/BaseUrl，凭据界面据此跳过它。 */
++export function isLocalProvider(provider: Provider): boolean {
++  return provider === 'local';
++}
++
+ export type Modality = 'image' | 'video' | 'chat';
+ 
+ export interface ModelParameter {
+diff --git a/src/utils/bench.ts b/src/utils/bench.ts
+new file mode 100644
+index 0000000..3f9bbe2
+--- /dev/null
++++ b/src/utils/bench.ts
+@@ -0,0 +1,103 @@
++/**
++ * 画布压测入口：`?bench=150` 会铺满 150 个带图的节点并测帧率。
++ *
++ * 存在的理由是“百节点不卡顿”这句话必须能被复现验证，而不是凭感觉。
++ * 只在带 bench 参数时执行，正常使用不受影响。
++ *
++ * 结果打印在控制台，并挂到 `window.__benchResult` 便于自动化读取。
++ */
++import { createInputImageFromDataURL } from '@/canvas/factory';
++import { useCanvas } from '@/store/canvas';
++import type { AppNode } from '@/types/node';
++
++export interface BenchResult {
++  nodes: number;
++  seedMs: number;
++  frames: number;
++  durationMs: number;
++  fps: number;
++  p95FrameMs: number;
++  worstFrameMs: number;
++}
++
++declare global {
++  interface Window {
++    __benchResult?: BenchResult;
++    __benchReady?: boolean;
++  }
++}
++
++/** 生成一张有真实像素的小图，避免测到“空 div”这种不具代表性的情形。 */
++function swatch(i: number): string {
++  const c = document.createElement('canvas');
++  c.width = 256;
++  c.height = 144;
++  const g = c.getContext('2d');
++  if (g) {
++    const hue = (i * 37) % 360;
++    const grad = g.createLinearGradient(0, 0, 256, 144);
++    grad.addColorStop(0, `hsl(${hue} 70% 55%)`);
++    grad.addColorStop(1, `hsl(${(hue + 60) % 360} 70% 35%)`);
++    g.fillStyle = grad;
++    g.fillRect(0, 0, 256, 144);
++    g.fillStyle = 'rgba(255,255,255,0.9)';
++    g.font = 'bold 28px system-ui';
++    g.fillText(String(i), 12, 40);
++  }
++  return c.toDataURL('image/png');
++}
++
++function measureFps(durationMs: number): Promise<Omit<BenchResult, 'nodes' | 'seedMs'>> {
++  return new Promise((resolve) => {
++    const frameTimes: number[] = [];
++    let last = performance.now();
++    const start = last;
++    const tick = (now: number) => {
++      frameTimes.push(now - last);
++      last = now;
++      if (now - start < durationMs) {
++        requestAnimationFrame(tick);
++        return;
++      }
++      const sorted = [...frameTimes].sort((a, b) => a - b);
++      const elapsed = now - start;
++      resolve({
++        frames: frameTimes.length,
++        durationMs: Math.round(elapsed),
++        fps: Number(((frameTimes.length / elapsed) * 1000).toFixed(1)),
++        p95FrameMs: Number((sorted[Math.floor(sorted.length * 0.95)] ?? 0).toFixed(2)),
++        worstFrameMs: Number((sorted[sorted.length - 1] ?? 0).toFixed(2)),
++      });
++    };
++    requestAnimationFrame(tick);
++  });
++}
++
++export async function maybeRunBench(): Promise<void> {
++  const count = Number(new URLSearchParams(window.location.search).get('bench') ?? 0);
++  if (!Number.isFinite(count) || count <= 0) return;
++
++  const t0 = performance.now();
++  const cols = Math.ceil(Math.sqrt(count * 1.6));
++  const nodes: AppNode[] = [];
++  for (let i = 0; i < count; i += 1) {
++    nodes.push(
++      createInputImageFromDataURL(swatch(i), `bench-${i}.png`, {
++        x: (i % cols) * 360,
++        y: Math.floor(i / cols) * 300,
++      }),
++    );
++  }
++  // 一次性灌入，避免 N 次 set 触发 N 次订阅
++  useCanvas.setState({ nodes, edges: [], selectedIds: [] });
++  const seedMs = Math.round(performance.now() - t0);
++
++  // 等布局与首帧稳定后再采样
++  await new Promise((r) => setTimeout(r, 1500));
++  const m = await measureFps(4000);
++  const result: BenchResult = { nodes: count, seedMs, ...m };
++  window.__benchResult = result;
++  window.__benchReady = true;
++  // eslint-disable-next-line no-console
++  console.log('[bench]', JSON.stringify(result));
++}
+diff --git a/vite.config.ts b/vite.config.ts
+index 8fb34e7..182c020 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -14,11 +14,15 @@ export default defineConfig({
+     port: 5173,
+     strictPort: false,
+     proxy: {
++      // Liblocal 编排器：托管本地 H3 渠道，并兼容 PinCanvas 原有的 /api 端点。
++      // 生产构建由编排器同源托管，因此代理只在开发模式生效。
+       '/api': {
+-        target: 'http://127.0.0.1:8787',
++        target: `http://127.0.0.1:${process.env.LIBLOCAL_PORT ?? 8801}`,
+         changeOrigin: true,
+-        timeout: 10 * 60_000,
+-        proxyTimeout: 10 * 60_000,
++        ws: true,
++        // 一次视频生成可能跑好几分钟，默认超时会在采样中途掐断连接。
++        timeout: 30 * 60_000,
++        proxyTimeout: 30 * 60_000,
+       },
+     },
+   },

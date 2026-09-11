@@ -1,0 +1,12 @@
+# 补丁文件必须保持原样：CRLF 转换会破坏 git apply 的上下文匹配
+*.patch -text
+*.bat   -text
+
+# 文本文件统一走 LF 入库，检出时按平台转换
+*.py    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.md    text eol=lf
+*.ps1   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf

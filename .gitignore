@@ -1,0 +1,27 @@
+# ---- 运行时与权重：绝不入库（36GB，由 setup.ps1 在目标机下载/重建）----
+runtime/
+data/
+deploy/speedtest.bin
+deploy/scratch/
+
+# ---- 第三方源码：由 setup 脚本从上游克隆，不在此重复分发 ----
+PinCanvas/
+h3lite/
+_ref_Storyboard-Copilot/
+
+# ---- 构建产物与环境 ----
+node_modules/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ---- 生成物与临时 ----
+*.log
+logs/
+*.tmp
+*.part
+.DS_Store
+Thumbs.db
