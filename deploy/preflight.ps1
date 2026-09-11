@@ -55,53 +55,40 @@ foreach ($f in $ps1) {
 }
 
 # ---------------------------------------------------------------- 3. 补丁
-Head "3. 前端补丁完整性与可应用性"
-$patch = Join-Path $RepoRoot 'deploy\pincanvas-local.patch'
-if (-not (Test-Path $patch)) {
-    Fail "未找到 pincanvas-local.patch"
-} else {
-    $txt = Get-Content $patch -Raw -Encoding UTF8
-
-    # 首台曾经因为生成时把 stderr 重定向进文件，混入 8 处 git 警告，
-    # 其中 4 处把代码行劈成两半，导致 git apply 报 corrupt patch。
-    $pollution = ([regex]::Matches($txt, "warning: in the working copy of '[^']*', LF will be replaced by CRLF")).Count
-    if ($pollution -gt 0) {
-        Fail "补丁混入了 $pollution 处 git 警告文本（生成时不要重定向 stderr）"
-    } else {
-        Pass "补丁无 git 警告污染"
-    }
-
-    $fileCount = ([regex]::Matches($txt, '(?m)^diff --git ')).Count
-    Pass "补丁覆盖 $fileCount 个文件"
-
-    # 在干净的上游副本上试应用。用本地已有的 origin 引用，无需联网。
-    $pin = Join-Path $RepoRoot 'PinCanvas'
-    if (Test-Path (Join-Path $pin '.git')) {
-        $tmp = Join-Path $env:TEMP ('pccheck-' + [Guid]::NewGuid().ToString('N').Substring(0,8))
-        Push-Location $pin
-        try {
-            & git worktree add --detach $tmp 7419da0 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Warn2 "无法创建 worktree，跳过补丁应用测试"
-            } else {
-                Push-Location $tmp
-                try {
-                    & git apply --check --whitespace=nowarn $patch 2>&1 | Out-Null
-                    if ($LASTEXITCODE -eq 0) {
-                        Pass "补丁可在干净的 7419da0 上应用"
-                    } else {
-                        Fail "补丁无法应用（上游可能已变动，或补丁已损坏）"
-                        Write-Host "         诊断: cd $tmp; git apply --check -v `"$patch`""
-                    }
-                } finally { Pop-Location }
-            }
-        } finally {
-            Pop-Location
-            & git worktree remove $tmp --force 2>&1 | Out-Null
-            & git worktree prune 2>&1 | Out-Null
+Head "3. 前端来源（fork 分支）"
+# 前端已改为从我们自己的 fork 拉取，改造提交在 liblocal 分支里，
+# 不再需要补丁分发。这里确认配置指向 fork 而不是上游。
+$setup = Join-Path $RepoRoot 'deploy\setup.ps1'
+if (Test-Path $setup) {
+    $st = Get-Content $setup -Raw -Encoding UTF8
+    if ($st -match 'Timefiles404/PinCanvas') {
+        Pass "setup.ps1 指向我们的 fork"
+        if ($st -match "pcBranch\s*=\s*'([^']+)'") {
+            Pass "前端分支: $($Matches[1])"
+        } else {
+            Warn2 "未找到 pcBranch 定义"
         }
     } else {
-        Warn2 "未找到 PinCanvas 仓库，跳过补丁应用测试"
+        Fail "setup.ps1 仍指向上游仓库（应改用 fork，避免依赖补丁）"
+    }
+    if ($st -match 'pincanvas-local\.patch') {
+        Warn2 "setup.ps1 仍引用补丁文件；若已切到 fork 应移除该引用"
+    } else {
+        Pass "setup.ps1 不再依赖补丁"
+    }
+} else {
+    Fail "未找到 deploy\setup.ps1"
+}
+
+# 历史补丁若还留在仓库里，至少不能是坏的（避免有人误用）
+$patch = Join-Path $RepoRoot 'deploy\pincanvas-local.patch'
+if (Test-Path $patch) {
+    $txt = Get-Content $patch -Raw -Encoding UTF8
+    $pollution = ([regex]::Matches($txt, "warning: in the working copy of '[^']*', LF will be replaced by CRLF")).Count
+    if ($pollution -gt 0) {
+        Fail "遗留补丁混入 $pollution 处 git 警告文本"
+    } else {
+        Pass "遗留补丁无污染（仅作历史参考）"
     }
 }
 
@@ -109,18 +96,18 @@ if (-not (Test-Path $patch)) {
 Head "4. 权重下载器模板"
 $tplTest = Join-Path $RepoRoot 'deploy\test_download_template.ps1'
 if (Test-Path $tplTest) {
+    # 注意：不要用 $LASTEXITCODE 判断——PS 5.1 下它会被之前任何原生命令
+    # 的返回码污染（EAP=Continue 时不会重置）。只看输出里的 [FAIL] 计数。
     $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $tplTest 2>&1
     $text = $out -join "`n"
     $fails = ([regex]::Matches($text, '\[FAIL\]')).Count
-    if ($fails -eq 0 -and $text -match '语法 OK') {
-        Pass "下载器模板语法正确且关键点齐备"
+    $oks   = ([regex]::Matches($text, '\[OK\]')).Count
+    if ($fails -eq 0 -and $oks -ge 10) {
+        Pass "下载器契约检查通过（$oks 项）"
     } else {
-        Fail "下载器模板检查未通过（$fails 项失败）"
-        $out | Select-Object -Last 12 | ForEach-Object { Write-Host "         $_" }
+        Fail "下载器契约检查未通过（$fails 项失败，$oks 项通过）"
+        $out | Where-Object { $_ -match '\[FAIL\]' } | ForEach-Object { Write-Host "         $_" }
     }
-    # 关键回归：modelscope 1.40 移除了 python -m 入口
-    if ($text -match 'modelscope\.exe') { Pass "使用 modelscope.exe 入口" }
-    else { Fail "未使用 modelscope.exe 入口（python -m modelscope 已失效）" }
 } else {
     Warn2 "未找到 test_download_template.ps1，跳过"
 }

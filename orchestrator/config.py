@@ -86,6 +86,34 @@ NATIVE_SET: tuple[ModelFile, ...] = (
 MODEL_BY_ROLE: dict[str, ModelFile] = {m.role: m for m in NATIVE_SET}
 
 
+# ---------------------------------------------------------------- upscaling
+#
+# H3's canvas tops out around 768x1344 — that is the trained range, so asking
+# for more *generation* pixels is not the answer. Beyond that it is pixel-level
+# enlargement, which is what these weights are for.
+#
+# These load through ComfyUI's native UpscaleModelLoader (spandrel), so no
+# custom node is involved. They are optional: without any of them installed the
+# orchestrator falls back to Lanczos, which needs no weights at all.
+UPSCALE_MODELS: tuple[ModelFile, ...] = (
+    ModelFile("ultrasharp", "upscale_models", "4x-UltraSharp.pth",
+              min_bytes=60_000_000, required=False,
+              note="通用 4x ESRGAN，质量与体积平衡最好，作为默认"),
+    ModelFile("realesrgan_x4plus", "upscale_models", "RealESRGAN_x4plus.pth",
+              min_bytes=60_000_000, required=False,
+              note="Real-ESRGAN 官方 4x，写实照片风格稳"),
+    ModelFile("realesrgan_anime", "upscale_models", "RealESRGAN_x4plus_anime_6B.pth",
+              min_bytes=15_000_000, required=False,
+              note="动漫/插画风格 4x"),
+)
+
+UPSCALE_BY_ROLE: dict[str, ModelFile] = {m.role: m for m in UPSCALE_MODELS}
+
+
+def available_upscalers() -> list[ModelFile]:
+    return [m for m in UPSCALE_MODELS if m.present()]
+
+
 def missing_models(required_only: bool = True) -> list[ModelFile]:
     return [m for m in NATIVE_SET
             if (m.required or not required_only) and not m.present()]

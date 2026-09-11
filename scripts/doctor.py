@@ -124,6 +124,23 @@ def main() -> int:
         else:
             r.warn("模型 " + m.role, "可选，未安装：%s" % m.filename)
 
+    # --- 超分 ---------------------------------------------------------
+    print("-" * 72)
+    have_upscaler = False
+    for m in config.UPSCALE_MODELS:
+        if m.present():
+            have_upscaler = True
+            r.ok("超分模型 " + m.role,
+                 "%s（%.1f MB）" % (m.filename, m.path.stat().st_size / 1024 ** 2))
+        else:
+            # 不是问题：没有超分模型时会自动回退到 Lanczos 纯缩放
+            r.ok("超分模型 " + m.role + "（未装）", "缺 %s" % m.filename)
+    if have_upscaler:
+        print("       超分可用：ESRGAN 4x 超采样后按需降采样。")
+    else:
+        print("       未安装超分模型，超分将回退到 Lanczos 纯缩放（无需权重）。")
+        print("       装模型： deploy\\get-models.ps1 -Batch github")
+
     # --- 端口 ---------------------------------------------------------
     print("-" * 72)
     for name, port in (("编排器", config.API_PORT), ("ComfyUI", config.COMFY_PORT)):

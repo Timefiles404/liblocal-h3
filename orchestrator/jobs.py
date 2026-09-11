@@ -58,8 +58,46 @@ class Job:
     finished_at: float | None = None
     load_secs: float | None = None
     label: str = ""
+    # Set when the job carries a pre-built graph instead of an H3Request
+    # (super-resolution and other post-processing). See submit_graph().
+    graph: dict[str, Any] | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        # Post-processing jobs carry no H3Request worth describing; report the
+        # plan instead of a bogus cost estimate.
+        if self.graph is not None:
+            return {
+                "id": self.id,
+                "kind": self.kind,
+                "route": "upscale",
+                "state": self.state.value,
+                "progress": round(self.progress, 4),
+                "step": self.step,
+                "totalSteps": self.total_steps,
+                "node": self.node,
+                "error": self.error,
+                "label": self.label,
+                "createdAt": self.created_at,
+                "startedAt": self.started_at,
+                "finishedAt": self.finished_at,
+                "elapsed": ((self.finished_at or time.time()) - self.started_at)
+                            if self.started_at else None,
+                "loadSecs": self.load_secs,
+                "params": {"plan": self.meta.get("plan", "")},
+                "cost": {},
+                "outputs": [
+                    {
+                        "kind": a.kind,
+                        "filename": a.filename,
+                        "subfolder": a.subfolder,
+                        "url": "/api/file?" + "&".join(
+                            k + "=" + v for k, v in a.view_params().items() if v),
+                    }
+                    for a in self.artifacts
+                ],
+            }
+
         est = self.request.cost_estimate()
         return {
             "id": self.id,
@@ -193,6 +231,26 @@ class JobManager:
         self._job_changed(job)
         return job
 
+    def submit_graph(self, kind: str, graph: dict[str, Any], *,
+                     label: str = "", meta: dict[str, Any] | None = None) -> Job:
+        """Queue a pre-built graph that is not an H3 generation.
+
+        Super-resolution and similar post-processing live here: they share the
+        queue, the lifecycle and the progress plumbing, but have no H3Request to
+        describe them -- so the job carries the graph and an optional plan
+        string instead.
+        """
+        req = h3.H3Request(prompt="", width=0, height=0, length=0, steps=0)
+        job = Job(id=uuid.uuid4().hex[:12], kind=kind, request=req, label=label)
+        job.graph = graph
+        job.meta = dict(meta or {})
+        self.jobs[job.id] = job
+        self.order.append(job.id)
+        self._queue.put_nowait(job.id)
+        self._last_activity = time.time()
+        self._job_changed(job)
+        return job
+
     async def cancel(self, job_id: str) -> bool:
         job = self.jobs.get(job_id)
         if job is None or job.state in (JobState.DONE, JobState.ERROR,
@@ -238,7 +296,7 @@ class JobManager:
 
         await self.ensure_comfy()
 
-        graph = h3.build(job.kind, job.request)
+        graph = job.graph if job.graph is not None else h3.build(job.kind, job.request)
         self._sampling_started = None
         try:
             job.prompt_id = await self.client.submit(graph)

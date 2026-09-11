@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import json
 import mimetypes
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from .comfy_client import Artifact
 from .comfy_process import State
 from .jobs import JobManager
 from .workflows import h3
+from .workflows import upscale as upscale_mod
 
 routes = web.RouteTableDef()
 MANAGER_KEY = web.AppKey("manager", JobManager)
@@ -228,6 +230,82 @@ async def generate(request: web.Request) -> web.Response:
     return web.json_response(job.to_dict(), status=202)
 
 
+@routes.post("/api/upscale")
+async def upscale(request: web.Request) -> web.Response:
+    """Super-resolution pass over an existing artifact.
+
+    Kept as a separate endpoint from /api/generate on purpose: upscaling must not
+    invalidate or re-run a generation that already succeeded, and it has its own
+    failure modes (OOM on large frames, no weights installed).
+    """
+    mgr = _mgr(request)
+    try:
+        body = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        raise web.HTTPBadRequest(text="请求体必须是 JSON")
+
+    filename = body.get("image") or body.get("filename")
+    if not filename:
+        raise web.HTTPBadRequest(text="需要 image（要超分的文件名）")
+
+    # The file must already live in ComfyUI's input dir for LoadImage to resolve
+    # it. Artifacts live in output/, so stage a copy across if needed.
+    src = Path(str(filename)).name
+    in_dir = config.COMFY_INPUT / src
+    if not in_dir.is_file():
+        sub = str(body.get("subfolder") or "").strip().strip("/")
+        candidates: list[Path] = []
+        if sub:
+            candidates.append(config.COMFY_OUTPUT / sub / src)
+        candidates.append(config.COMFY_OUTPUT / src)
+        found = next((p for p in candidates if p.is_file()), None)
+        if found is None:
+            # Fall back to a recursive search: the canvas usually only knows the
+            # basename, and making the user supply the subfolder is a poor
+            # trade for a walk over a few hundred files.
+            found = next((p for p in config.COMFY_OUTPUT.rglob(src) if p.is_file()),
+                         None)
+        if found is None:
+            raise web.HTTPNotFound(text="找不到要超分的文件: " + src)
+        config.COMFY_INPUT.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(found, in_dir)
+
+    up = upscale_mod.UpscaleRequest(
+        image=in_dir.name,
+        method=str(body.get("method") or "esrgan"),
+        model_name=body.get("model"),
+        scale=float(body.get("scale") or 2.0),
+        target_width=body.get("width"),
+        target_height=body.get("height"),
+        filename_prefix="liblocal/upscaled",
+        fps=float(body.get("fps") or 24.0),
+    )
+    if up.target_width:
+        up.target_width = int(up.target_width)
+    if up.target_height:
+        up.target_height = int(up.target_height)
+
+    if not config.available_upscalers() and up.method == "esrgan":
+        return web.json_response(
+            {"error": "未安装超分模型，请改用 method=lanczos 或先下载权重",
+             "available": []}, status=412)
+
+    graph = upscale_mod.build_image_upscale(up)
+    job = mgr.submit_graph("upscale", graph, label="超分 " + up.route(),
+                           meta={"plan": upscale_mod.describe_plan(up)})
+    return web.json_response(job.to_dict(), status=202)
+
+
+@routes.get("/api/upscalers")
+async def list_upscalers(_request: web.Request) -> web.Response:
+    return web.json_response({"upscalers": [
+        {"role": m.role, "filename": m.filename, "present": m.present(),
+         "sizeMb": round(m.path.stat().st_size / 1024 ** 2, 1) if m.path.is_file() else 0,
+         "note": m.note}
+        for m in config.UPSCALE_MODELS
+    ]})
+
+
 @routes.post("/api/estimate")
 async def estimate(request: web.Request) -> web.Response:
     """Cost preview without queueing anything."""
@@ -239,7 +317,6 @@ async def estimate(request: web.Request) -> web.Response:
     # For images, build_image picks the actual length (5 vs 22 depending on
     # whether references are present), so reflect that in the estimate.
     if kind == "image":
-        from .workflows import h3 as h3mod
         has_refs = any(req.ref_images)
         req.length = config.IMAGE_LENGTH_REF if has_refs else config.IMAGE_LENGTH
     return web.json_response({"cost": req.cost_estimate(),

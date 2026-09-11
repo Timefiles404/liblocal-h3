@@ -300,167 +300,60 @@ $chk = & $vp -c "import aiohttp,psutil,modelscope;print('deps ok')" 2>&1
 if ($chk -match 'deps ok') { Ok "编排器依赖就绪" } else { Die "依赖安装失败: $chk" }
 
 # ----------------------------------------------------------------- 6. 权重
-Head "6/7 模型权重（modelscope）"
+Head "6/7 模型权重"
 
+# 权重下载交给专门的 deploy\get-models.ps1，它按网络策略**分两批**：
+#   mirror 批（魔搭，约 33GB）—— 必须直连，走代理又慢又费流量
+#   github 批（超分权重，约 90MB）—— 大陆常需代理
+# setup.ps1 这一步只做「把镜像批挂到后台跑」，因为 33GB 远超单条命令的时限。
+# GitHub 批很小、且是否需要代理取决于当下环境，留给你手动跑更省事。
 if ($SkipModels) {
     Skip "-SkipModels 指定，跳过权重下载"
     $bgScript = $null
 } else {
-    # 下载在独立进程里跑：30GB 会远超单条命令的时限，且中断后要能续。
-    $bgScript = Join-Path $root 'data\state\download-models.ps1'
+    $getModels = Join-Path $root 'deploy\get-models.ps1'
+    if (-not (Test-Path $getModels)) { $getModels = Join-Path $PSScriptRoot 'get-models.ps1' }
+    if (-not (Test-Path $getModels)) { Die "未找到 deploy\get-models.ps1" }
+
+    $bgScript = Join-Path $root 'data\state\download-mirror-batch.ps1'
     New-Item -ItemType Directory -Force -Path (Split-Path $bgScript) | Out-Null
 
-    $manifest = Join-Path $root 'deploy\models.ps1'
-    if (-not (Test-Path $manifest)) {
-        # 从仓库根运行时找不到，尝试相对脚本自身
-        $manifest = Join-Path $PSScriptRoot 'models.ps1'
-    }
-    if (-not (Test-Path $manifest)) { Die "未找到 deploy\models.ps1 权重清单" }
-
-    $followFlag = if ($Follow) { '$true' } else { '$false' }
-    $refFlag = if ($WithRef2VA) { '$true' } else { '$false' }
-
+    $refFlag = if ($WithRef2VA) { '-WithRef2VA' } else { '' }
     $body = @"
 `$ErrorActionPreference = 'Continue'
-. '$manifest'
-`$ref = $refFlag
-`$comfy = '$comfy'
-`$py = '$vp'
-`$log = '$dlLog'
-`$stamp = '$dlStamp'
-New-Item -ItemType Directory -Force -Path (Split-Path `$log) | Out-Null
-
-# 每次运行都轮转日志：追加模式下上次失败留下的 "DONE" 会让外部轮询误判完成。
-if (Test-Path `$log) {
-    `$prev = `$log -replace '\.log$', ('-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
-    Move-Item `$log `$prev -Force -ErrorAction SilentlyContinue
-}
-# 完成戳在开始时先删掉，跑完再写；它是唯一的完成信号。
-Remove-Item `$stamp -Force -ErrorAction SilentlyContinue
-
-function Log(`$m) {
-    `$line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), `$m
-    Write-Host `$line
-    Add-Content -Path `$log -Value `$line -Encoding UTF8
-}
-
-`$total = (`$Models | Where-Object { `$_.required -or `$ref }).Count
-`$i = 0
-Log "开始下载，共 `$total 个文件"
-`$failed = @()
-
-foreach (`$m in `$Models) {
-    if (-not `$m.required -and -not `$ref) { Log ("跳过可选: " + `$m.role); continue }
-    `$i++
-    `$destPath = Join-Path (Join-Path `$comfy 'models') `$m.dest
-    `$destDir = Split-Path `$destPath
-    New-Item -ItemType Directory -Force -Path `$destDir | Out-Null
-
-    # 续传判断：文件存在且大小达标就跳过
-    if (Test-Path `$destPath) {
-        `$sz = (Get-Item `$destPath).Length
-        if (`$sz -ge `$m.size * 0.99) {
-            Log ("[{0}/{1}] 已存在，跳过: {2}" -f `$i, `$total, `$m.role)
-            continue
-        }
-        Log ("[{0}/{1}] 大小不符({2} < {3})，重新下载: {4}" -f `$i, `$total, `$sz, `$m.size, `$m.role)
-        Remove-Item `$destPath -Force -ErrorAction SilentlyContinue
-    }
-
-    Log ("[{0}/{1}] 下载 {2}  <- {3}/{4}" -f `$i, `$total, `$m.role, `$m.repo, `$m.file)
-    `$t0 = Get-Date
-    `$tmpDir = Join-Path `$destDir '.ms-stage'
-    New-Item -ItemType Directory -Force -Path `$tmpDir | Out-Null
-
-    # modelscope 1.40 移除了 `python -m modelscope` 入口（会报
-    # "No module named modelscope.__main__"），必须用 modelscope.exe。
-    # 另外参数是位置式的：repo 和文件路径都是位置参数，输出目录是 --local-dir。
-    `$msExe = Join-Path (Split-Path `$py) 'modelscope.exe'
-    if (-not (Test-Path `$msExe)) {
-        # 少数安装布局会把它放在 Scripts 之外的等价位置，退回 uv 的入口脚本
-        `$msExe = Get-ChildItem (Split-Path `$py) -Filter 'modelscope*' -ErrorAction SilentlyContinue |
-                  Where-Object { `$_.Extension -eq '.exe' } | Select-Object -First 1 -ExpandProperty FullName
-    }
-    if (-not `$msExe) {
-        Log "    找不到 modelscope.exe，无法下载。请确认已 pip install modelscope"
-        `$failed += `$m.role
-        continue
-    }
-
-    & `$msExe download `$m.repo `$m.file --local-dir `$tmpDir 2>&1 |
-        ForEach-Object { Log ("    " + `$_) }
-
-    # modelscope 会把文件按仓库内路径落到 --local-dir 之下
-    `$staged = Join-Path `$tmpDir `$m.file
-    if (-not (Test-Path `$staged)) {
-        `$alt = Join-Path `$tmpDir (Split-Path `$m.file -Leaf)
-        if (Test-Path `$alt) { `$staged = `$alt }
-    }
-    if (Test-Path `$staged) {
-        Move-Item `$staged `$destPath -Force
-        Remove-Item `$tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-        `$sz = (Get-Item `$destPath).Length
-        `$dt = ((Get-Date) - `$t0).TotalSeconds
-        if (`$sz -ge `$m.size * 0.99) {
-            Log ("    OK {0}  {1:N2}GB  {2:N0}s  {3:N1}MB/s" -f `$m.role, (`$sz/1GB), `$dt, (`$sz/1MB/`$dt))
-        } else {
-            Log ("    大小异常: {0} 期望 {1}" -f `$sz, `$m.size)
-            `$failed += `$m.role
-        }
-    } else {
-        Log ("    未产出文件，可能下载失败: " + `$m.role)
-        `$failed += `$m.role
-    }
-}
-
-if (`$failed.Count -gt 0) {
-    Log ("完成但有失败: " + (`$failed -join ', '))
-    Log "重跑本脚本只会补缺失的文件。"
-    # 有失败就写 FAILED 戳：外部只看戳，不必解析日志文本
-    Set-Content -Path `$stamp -Value ("FAILED " + (`$failed -join ',')) -Encoding UTF8
-} else {
-    Log "全部权重下载完成。"
-    Set-Content -Path `$stamp -Value "OK" -Encoding UTF8
-}
-Log "DONE"
+& '$getModels' -Batch mirror -InstallDir '$root' $refFlag
 "@
     Set-Content -Path $bgScript -Value $body -Encoding UTF8
+    Remove-Item $dlStamp -Force -ErrorAction SilentlyContinue
 
-    Say "在后台启动权重下载（约 33GB，耗时取决于网速）…"
+    Say "在后台启动镜像批下载（约 33GB，耗时取决于网速）…"
     Say "日志: $dlLog"
-    Say "完成戳: $dlStamp （出现即完成，内容 OK 或 FAILED ...）"
+    Say "完成戳: $dlStamp（出现即完成，内容 OK 或 FAILED ...）"
     $proc = Start-Process -FilePath 'powershell.exe' `
         -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $bgScript) `
         -WindowStyle Hidden -PassThru
     Ok "下载进程已启动 PID $($proc.Id)"
 
-    # 首文件哨兵：等一小会儿，确认下载**真的开始了**。
-    # 之前的教训是 modelscope 调用方式过时导致 5 个文件各 1 秒失败，
-    # 而 setup.ps1 因为下载是独立进程而返回「成功」—— 静默失败最难查。
+    # 首文件哨兵：之前的教训是下载器本身报错、但 setup 因为下载是独立进程而
+    # 返回「成功」——静默失败最难查。所以这里确认它**真的开始了**。
     Say "等待 45 秒确认下载已真正启动…"
     $started = $false
     for ($t = 0; $t -lt 15; $t++) {
         Start-Sleep -Seconds 3
-        if (Test-Path $dlStamp) { break }          # 太快结束 => 失败
+        if (Test-Path $dlStamp) { break }
         if (Test-Path $dlLog) {
             $tail = Get-Content $dlLog -Tail 40 -Encoding UTF8 -ErrorAction SilentlyContinue
-            if ($tail -match 'No module named|找不到 modelscope|Traceback') {
+            if ($tail -match 'No module named|找不到 modelscope|Traceback|未找到运行时') {
                 Warn "下载进程报告了致命错误："
-                $tail | Where-Object { $_ -match 'No module named|找不到|Error|Traceback' } |
+                $tail | Where-Object { $_ -match 'No module named|找不到|Error|Traceback|未找到' } |
                     Select-Object -First 5 | ForEach-Object { Warn "  $_" }
                 break
             }
-            # .ms-stage 下开始出现文件 => 确实在下载
-            $staged = Get-ChildItem (Join-Path $comfy 'models') -Recurse -Filter '*.incomplete' -ErrorAction SilentlyContinue
-            $anyFile = Get-ChildItem (Join-Path $comfy 'models') -Recurse -File -ErrorAction SilentlyContinue |
-                       Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-2) } |
-                       Select-Object -First 1
-            if ($anyFile -or $tail -match 'Downloading|download.*%|\.safetensors') {
-                $started = $true
-                Ok "下载已在进行"
-                break
-            }
         }
+        $anyFile = Get-ChildItem (Join-Path $comfy 'models') -Recurse -File -ErrorAction SilentlyContinue |
+                   Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-2) } |
+                   Select-Object -First 1
+        if ($anyFile) { $started = $true; Ok "下载已在进行"; break }
     }
     if (Test-Path $dlStamp) {
         $v = (Get-Content $dlStamp -Raw -Encoding UTF8).Trim()
@@ -469,108 +362,78 @@ Log "DONE"
         Warn "45 秒内未观察到下载活动。可能仍在解析依赖，也可能已静默失败。"
         Warn "请手动确认：Get-Content '$dlLog' -Tail 20"
     }
+    Write-Host ""
+    Say "超分权重（约 90MB）不在这一批里。等镜像批跑完后，"
+    Say "**开着代理**执行下面这行即可（或直连，脚本会自己选路）："
+    Say "    .\deploy\get-models.ps1 -Batch github"
 }
 
 # ----------------------------------------------------------------- 7. 前端
 Head "7/7 前端画布构建"
 
 $pcDir = Join-Path $root 'PinCanvas'
-$pcStamp = Join-Path $pcDir '.liblocal-patched'
 
-# 跳过条件看「补丁戳」而不是「dist 是否存在」：
-# 之前用 dist/index.html 判断，结果第一次补丁失败但构建成功，
-# 之后再跑脚本会整段跳过，补丁永远补不上。
-$pcNeedsWork = $true
-if ((Test-Path (Join-Path $pcDir 'dist\index.html')) -and (Test-Path $pcStamp)) {
-    Skip "前端已构建且补丁已应用: $pcDir\dist"
+# 前端来自**我们自己的 fork**（Timefiles404/PinCanvas），本地改造已经提交在里面，
+# 所以不再需要打补丁——之前用补丁是因为上游停更、我们又不想整份拷贝，
+# 但补丁方案很脆（行尾/空白/上游变动都会让它失效），fork 更省事也更好维护。
+$pcRepo = 'https://github.com/Timefiles404/PinCanvas.git'
+$pcBranch = 'liblocal'
+
+$pcNeedsWork = -not (Test-Path (Join-Path $pcDir 'dist\index.html'))
+
+if (-not $pcNeedsWork) {
+    Skip "前端已构建: $pcDir\dist"
+} elseif (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Warn "无 git，跳过前端。画布将无法显示（后端接口正常）。"
     $pcNeedsWork = $false
-}
-
-if ($pcNeedsWork) {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Warn "无 git，跳过前端源码获取。画布将无法显示（后端接口正常）。"
-        $pcNeedsWork = $false
-    } elseif (-not (Test-Path (Join-Path $pcDir 'package.json'))) {
-        # 钉在上游 7419da0：本地补丁是按该 commit 生成的，跟随 HEAD 会让补丁失效。
-        $pcCommit = '7419da0'
-        Say "克隆 PinCanvas 前端源码（钉在 $pcCommit）…"
-        & git clone --depth 1 https://github.com/tdsoc2002/PinCanvas.git $pcDir 2>&1 |
-            ForEach-Object { Say $_ }
-        if (Test-Path (Join-Path $pcDir '.git')) {
-            Push-Location $pcDir
-            try {
-                & git fetch --depth 1 origin $pcCommit 2>&1 | ForEach-Object { Say $_ }
-                & git checkout -q FETCH_HEAD 2>&1 | ForEach-Object { Say $_ }
-                $now = (& git rev-parse --short HEAD) 2>$null
-                if ($now) { Ok "PinCanvas @ $now" }
-            } finally { Pop-Location }
-        }
+} else {
+    if (Test-Path (Join-Path $pcDir '.git')) {
+        Say "更新 PinCanvas（我们的 fork: $pcBranch）…"
+        Push-Location $pcDir
+        try {
+            & git remote set-url origin $pcRepo 2>&1 | Out-Null
+            & git fetch --depth 1 origin $pcBranch 2>&1 | ForEach-Object { Say $_ }
+            & git checkout -q -B $pcBranch FETCH_HEAD 2>&1 | ForEach-Object { Say $_ }
+            $now = (& git rev-parse --short HEAD) 2>$null
+            if ($now) { Ok "PinCanvas @ $now" }
+        } finally { Pop-Location }
     } else {
-        Skip "PinCanvas 源码已存在"
+        if (Test-Path $pcDir) {
+            Warn "$pcDir 已存在但不是 git 仓库，移入 .backup-<时间戳> 后重新克隆"
+            $bak = Join-Path $root ('.backup-pincanvas-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            Move-Item $pcDir $bak -Force
+        }
+        Say "克隆 PinCanvas（含本地改造）…"
+        & git clone --depth 1 --branch $pcBranch $pcRepo $pcDir 2>&1 |
+            ForEach-Object { Say $_ }
+        if (Test-Path (Join-Path $pcDir 'package.json')) {
+            $now = (& git -C $pcDir rev-parse --short HEAD) 2>$null
+            Ok "PinCanvas @ $now"
+        }
     }
 }
 
 if ($pcNeedsWork -and (Test-Path (Join-Path $pcDir 'package.json'))) {
-    $patch = Join-Path $root 'deploy\pincanvas-local.patch'
-    if (-not (Test-Path $patch)) { $patch = Join-Path $PSScriptRoot 'pincanvas-local.patch' }
-    if (Test-Path $patch) {
-        if (Test-Path $pcStamp) {
-            Skip "本地补丁已应用"
-        } else {
-            Say "应用 Liblocal 本地补丁（H3 渠道 / 运行时面板 / 画布性能）…"
-            Push-Location $pcDir
-            try {
-                # 先 --check，避免半途失败留下修改过的工作区
-                & git apply --check --whitespace=nowarn $patch 2>&1 | ForEach-Object { Say $_ }
-                if ($LASTEXITCODE -ne 0) {
-                    Warn "补丁无法应用到当前工作区（上游可能已变动）。"
-                    Warn "诊断：cd $pcDir; git apply --check -v '$patch'"
-                    Warn "画布将使用原版，本地 H3 渠道不可用。"
-                } else {
-                    & git apply --whitespace=nowarn $patch 2>&1 | ForEach-Object { Say $_ }
-                    if ($LASTEXITCODE -eq 0) {
-                        Set-Content -Path $pcStamp -Value ((Get-Date).ToString('s')) -Encoding UTF8
-                        Ok "补丁应用成功"
-                        # 补丁改了源码，必须重建，否则 dist 还是旧的
-                        Remove-Item (Join-Path $pcDir 'dist') -Recurse -Force -ErrorAction SilentlyContinue
-                        Say "已清除旧 dist，将重新构建"
-                    } else {
-                        Warn "补丁应用失败"
-                    }
-                }
-            } finally { Pop-Location }
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $node) {
+        Warn "未找到 Node.js，无法构建前端。安装 https://nodejs.org (20.19+ 或 22 LTS) 后重新运行本脚本。"
+    } else {
+        # 项目内 .npmrc 指向 npmmirror，不改用户的全局 npm 配置
+        $npmrc = Join-Path $pcDir '.npmrc'
+        if (-not (Test-Path $npmrc)) {
+            Set-Content -Path $npmrc -Value "registry=https://registry.npmmirror.com`n" -Encoding UTF8
+            Ok "已写入 PinCanvas\.npmrc（使用 npmmirror）"
         }
-    } else {
-        Warn "未找到 pincanvas-local.patch，画布将使用原版（无本地 H3 渠道）"
-    }
-}
-
-if (Test-Path (Join-Path $pcDir 'package.json')) {
-    $needBuild = -not (Test-Path (Join-Path $pcDir 'dist\index.html'))
-    if (-not $needBuild) {
-        Skip "前端产物已存在，跳过构建"
-    } else {
-        $node = Get-Command node -ErrorAction SilentlyContinue
-        if (-not $node) {
-            Warn "未找到 Node.js，无法构建前端。安装 https://nodejs.org (20.19+ 或 22 LTS) 后重新运行本脚本。"
+        Say "Node $(node --version)，开始构建…"
+        Push-Location $pcDir
+        try {
+            & npm install --no-audit --no-fund 2>&1 | ForEach-Object { Say $_ }
+            & npm run build 2>&1 | ForEach-Object { Say $_ }
+        } finally { Pop-Location }
+        if (Test-Path (Join-Path $pcDir 'dist\index.html')) {
+            Ok "前端构建完成"
         } else {
-            # 项目内 .npmrc 指向 npmmirror，不要改用户的全局 npm 配置
-            $npmrc = Join-Path $pcDir '.npmrc'
-            if (-not (Test-Path $npmrc)) {
-                Set-Content -Path $npmrc -Value "registry=https://registry.npmmirror.com`n" -Encoding UTF8
-                Ok "已写入 PinCanvas\.npmrc（使用 npmmirror）"
-            }
-            Say "Node $(node --version)，开始构建…"
-            Push-Location $pcDir
-            try {
-                & npm install --no-audit --no-fund 2>&1 | ForEach-Object { Say $_ }
-                & npm run build 2>&1 | ForEach-Object { Say $_ }
-            } finally { Pop-Location }
-            if (Test-Path (Join-Path $pcDir 'dist\index.html')) {
-                Ok "前端构建完成"
-            } else {
-                Warn "前端构建未产出 dist\index.html"
-            }
+            Warn "前端构建未产出 dist\index.html"
         }
     }
 }
