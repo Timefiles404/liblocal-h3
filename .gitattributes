@@ -1,12 +1,17 @@
-# 补丁文件必须保持原样：CRLF 转换会破坏 git apply 的上下文匹配
+# 补丁必须字节级原样：任何行尾转换都会破坏 git apply 的上下文匹配
 *.patch -text
 *.bat   -text
 
-# 文本文件统一走 LF 入库，检出时按平台转换
+# PowerShell 脚本：仓库内保持 UTF-8 **带 BOM**。
+# BOM 靠文件字节本身承载，这里只禁用行尾转换，避免 git 在检出时改动字节。
+# 为什么必须带 BOM：PS 5.1 读无 BOM 的 .ps1 会按系统 ANSI(GBK) 解码，
+# 中文注释变成乱码字节，其中恰好可能构成 " < } 等语法字符，整份脚本解析崩溃。
+# 校验：首个 3 字节必须是 EF BB BF。
+*.ps1   -text
+
 *.py    text eol=lf
 *.ts    text eol=lf
 *.tsx   text eol=lf
 *.md    text eol=lf
-*.ps1   text eol=lf
 *.json  text eol=lf
 *.yml   text eol=lf

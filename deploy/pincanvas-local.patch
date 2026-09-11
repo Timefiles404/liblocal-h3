@@ -1,6 +1,3 @@
-warning: in the working copy of 'src/App.tsx', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'src/canvas/Canvas.tsx', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'src/canvas/factory.ts', LF will be replaced by CRLF the next time Git touches it
 diff --git a/src/App.tsx b/src/App.tsx
 index 13cf1c1..c771a86 100644
 --- a/src/App.tsx
@@ -64,20 +61,112 @@ index 13cf1c1..c771a86 100644
      </div>
    );
 diff --git a/src/api/images.ts b/src/api/images.ts
-index cb0d683..bc20162 100644
+index cb0d683..eac3230 100644
 --- a/src/api/images.ts
 +++ b/src/api/images.ts
-@@ -1,5 +1,6 @@
- import type { ModelDef } from '@/types/model';
- import { request } from './client';
+@@ -1,71 +1,89 @@
+-import type { ModelDef } from '@/types/model';
+-import { request } from './client';
+-import { routeRequest, type RouteCtx, type TaskInput } from './model-routing';
+-import { pollTask } from './poll';
+-import { resolveTemplate, type Vars } from './template';
+-
+-export interface ImageGenResult {
+-  created?: number;
+-  data: Array<{ url?: string; b64_json?: string }>;
+-}
+-
+-interface AsyncInit {
+-  task_id?: string;
+-  id?: string;
+-  status?: string;
+-}
+-
+-export interface GenerateImageOpts {
+-  model: ModelDef;
+-  baseUrl: string;
+-  apiKey?: string;
+-  vars: Vars;
+-  ctx: RouteCtx;
+-  signal?: AbortSignal;
+-  timeoutMs?: number;
+-}
+-
+-const TASK: TaskInput = { type: 'image' };
+-
+-export async function generateImage(opts: GenerateImageOpts): Promise<ImageGenResult> {
+-  const route = routeRequest(TASK, opts.model, opts.ctx);
+-  const resolved = resolveTemplate(route.bodyTemplate, opts.vars);
+-  const baseUrl = opts.baseUrl.replace(/\/+$/, '');
+-  const url = baseUrl + route.endpoint;
+-  const body: BodyInit =
+-    resolved.kind === 'json' ? JSON.stringify(resolved.body) : resolved.body;
+-
+-  if (route.async) {
+-    const init = await request<AsyncInit>({
+-      url,
+-      method: 'POST',
+-      apiKey: opts.apiKey,
+-      body,
+-      bodyKind: resolved.kind,
+-      signal: opts.signal,
+-      timeoutMs: opts.timeoutMs,
+-    });
+-    const taskId = init.task_id ?? init.id;
+-    if (!taskId) throw new Error('Async image response missing task_id');
+-    const pollUrl = `${baseUrl}/v1/tasks/${taskId}`;
+-    return pollTask<ImageGenResult & AsyncInit>(pollUrl, {
+-      apiKey: opts.apiKey,
+-      signal: opts.signal,
+-      isDone: (r) => {
+-        if (r.status === 'completed') return 'completed';
+-        if (r.status === 'failed') return 'failed';
+-        return 'pending';
+-      },
+-    });
+-  }
+-
+-  return request<ImageGenResult>({
+-    url,
+-    method: 'POST',
+-    apiKey: opts.apiKey,
+-    body,
+-    bodyKind: resolved.kind,
+-    signal: opts.signal,
+-    timeoutMs: opts.timeoutMs,
+-  });
+-}
++import type { ModelDef } from '@/types/model';
++import { request } from './client';
 +import { runLocalImage } from './local-bridge';
- import { routeRequest, type RouteCtx, type TaskInput } from './model-routing';
- import { pollTask } from './poll';
- import { resolveTemplate, type Vars } from './template';
-@@ -28,6 +29,23 @@ export interface GenerateImageOpts {
- const TASK: TaskInput = { type: 'image' };
- 
- export async function generateImage(opts: GenerateImageOpts): Promise<ImageGenResult> {
++import { routeRequest, type RouteCtx, type TaskInput } from './model-routing';
++import { pollTask } from './poll';
++import { resolveTemplate, type Vars } from './template';
++
++export interface ImageGenResult {
++  created?: number;
++  data: Array<{ url?: string; b64_json?: string }>;
++}
++
++interface AsyncInit {
++  task_id?: string;
++  id?: string;
++  status?: string;
++}
++
++export interface GenerateImageOpts {
++  model: ModelDef;
++  baseUrl: string;
++  apiKey?: string;
++  vars: Vars;
++  ctx: RouteCtx;
++  signal?: AbortSignal;
++  timeoutMs?: number;
++}
++
++const TASK: TaskInput = { type: 'image' };
++
++export async function generateImage(opts: GenerateImageOpts): Promise<ImageGenResult> {
 +  // 本地渠道在此分流：不需要 baseUrl / apiKey，也不经过模板与路由表。
 +  // 放在这一层而不是各个调用点，是为了让角色图、场景图、角色卡、分镜等
 +  // 所有出图入口一次性获得本地能力。
@@ -92,13 +181,50 @@ index cb0d683..bc20162 100644
 +      ratio: typeof opts.vars.ratio === 'string' ? opts.vars.ratio : undefined,
 +      signal: opts.signal,
 +    });
-+    return { created: Date.now(), dwarning: in the working copy of 'src/api/local-bridge.ts', LF will be replaced by CRLF the next time Git touches it
-ata: urls.map((url) => ({ url })) };
++    return { created: Date.now(), data: urls.map((url) => ({ url })) };
 +  }
 +
-   const route = routeRequest(TASK, opts.model, opts.ctx);
-   const resolved = resolveTemplate(route.bodyTemplate, opts.vars);
-   const baseUrl = opts.baseUrl.replace(/\/+$/, '');
++  const route = routeRequest(TASK, opts.model, opts.ctx);
++  const resolved = resolveTemplate(route.bodyTemplate, opts.vars);
++  const baseUrl = opts.baseUrl.replace(/\/+$/, '');
++  const url = baseUrl + route.endpoint;
++  const body: BodyInit =
++    resolved.kind === 'json' ? JSON.stringify(resolved.body) : resolved.body;
++
++  if (route.async) {
++    const init = await request<AsyncInit>({
++      url,
++      method: 'POST',
++      apiKey: opts.apiKey,
++      body,
++      bodyKind: resolved.kind,
++      signal: opts.signal,
++      timeoutMs: opts.timeoutMs,
++    });
++    const taskId = init.task_id ?? init.id;
++    if (!taskId) throw new Error('Async image response missing task_id');
++    const pollUrl = `${baseUrl}/v1/tasks/${taskId}`;
++    return pollTask<ImageGenResult & AsyncInit>(pollUrl, {
++      apiKey: opts.apiKey,
++      signal: opts.signal,
++      isDone: (r) => {
++        if (r.status === 'completed') return 'completed';
++        if (r.status === 'failed') return 'failed';
++        return 'pending';
++      },
++    });
++  }
++
++  return request<ImageGenResult>({
++    url,
++    method: 'POST',
++    apiKey: opts.apiKey,
++    body,
++    bodyKind: resolved.kind,
++    signal: opts.signal,
++    timeoutMs: opts.timeoutMs,
++  });
++}
 diff --git a/src/api/local-bridge.ts b/src/api/local-bridge.ts
 new file mode 100644
 index 0000000..15c8397
@@ -208,8 +334,7 @@ index 0000000..15c8397
 +export async function runLocalVideo(ctx: LocalRunContext): Promise<string> {
 +  const bag = readParams(ctx.model);
 +  const refsIn = ctx.referenceImages ?? [];
-+  const params: Parwarning: in the working copy of 'src/api/local.ts', LF will be replaced by CRLF the next time Git touches it
-tial<LocalGenerateParams> = {
++  const params: Partial<LocalGenerateParams> = {
 +    ...baseParams(ctx.model, ctx.ratio),
 +    length: num(bag, 'length') ?? 124,
 +    withAudio: bool(bag, 'withAudio') ?? true,
@@ -529,11 +654,263 @@ index 0000000..8b7e69c
 +  return job.outputs.find((o) => o.kind === kind)?.url ?? job.outputs[0]?.url;
 +}
 diff --git a/src/api/models.ts b/src/api/models.ts
-index 3946c03..d9c62a6 100644
+index 3946c03..499a65e 100644
 --- a/src/api/models.ts
 +++ b/src/api/models.ts
-@@ -1,6 +1,174 @@
+@@ -1,253 +1,421 @@
 -import type { ModelDef } from '@/types/model';
+-
+-export const DEFAULT_MODELS: ModelDef[] = [
+-  // OpenAI 兼容网关（Wan 系列等）
+-  {
+-    id: 'wan2.7-image',
+-    name: 'wan2.7-image',
+-    provider: 'openai',
+-    modality: 'image',
+-    ratios: ['1:1', '16:9', '9:16', '4:3', '3:4'],
+-    resolutions: ['1024x1024'],
+-    group: 'Wan',
+-  },
+-  {
+-    id: 'wan2.7-image-pro',
+-    name: 'wan2.7-image-pro',
+-    provider: 'openai',
+-    modality: 'image',
+-    ratios: ['1:1', '16:9', '9:16', '4:3', '3:4'],
+-    resolutions: ['1024x1024'],
+-    group: 'Wan',
+-  },
+-
+-  // OpenAI 同源
+-  { id: 'gpt-4o', name: 'gpt-4o', provider: 'openai', modality: 'chat' },
+-  { id: 'gpt-5.2', name: 'gpt-5.2', provider: 'openai', modality: 'chat' },
+-  { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', provider: 'openai', modality: 'chat' },
+-  {
+-    id: 'gpt-4o-image',
+-    name: 'gpt-4o-image',
+-    provider: 'openai',
+-    modality: 'image',
+-    supportsEdit: true,
+-  },
+-
+-  // Sora 视频
+-  {
+-    id: 'wan2.6-r2v-flash',
+-    name: 'wan2.6-r2v-flash',
+-    provider: 'openai',
+-    modality: 'video',
+-    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s'],
+-    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+-    resolutions: ['720p', '1080p'],
+-    group: 'Wan',
+-  },
+-  {
+-    id: 'wan2.7-i2v',
+-    name: 'wan2.7-i2v',
+-    provider: 'openai',
+-    modality: 'video',
+-    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s'],
+-    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+-    resolutions: ['720p', '1080p'],
+-    group: 'Wan',
+-  },
+-  {
+-    id: 'doubao-seedance-2-0-260128',
+-    name: 'doubao-seedance-2-0-260128',
+-    provider: 'openai',
+-    modality: 'video',
+-    async: true,
+-    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s'],
+-    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+-    resolutions: ['720p', '1080p'],
+-    group: 'Seedance',
+-  },
+-  {
+-    id: 'happyhorse-1.0-r2v',
+-    name: 'happyhorse-1.0-r2v',
+-    displayName: 'HappyHorse(多图参考)',
+-    provider: 'openai',
+-    modality: 'video',
+-    async: true,
+-    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+-    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+-    resolutions: ['720p', '1080p'],
+-    group: 'HappyHorse',
+-  },
+-  {
+-    id: 'happyhorse-1.0-t2v',
+-    name: 'happyhorse-1.0-t2v',
+-    displayName: 'HappyHorse(文生视频)',
+-    provider: 'openai',
+-    modality: 'video',
+-    async: true,
+-    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+-    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+-    resolutions: ['720p', '1080p'],
+-    group: 'HappyHorse',
+-  },
+-  {
+-    id: 'happyhorse-1.0-i2v',
+-    name: 'happyhorse-1.0-i2v',
+-    displayName: 'HappyHorse(图生视频)',
+-    provider: 'openai',
+-    modality: 'video',
+-    async: true,
+-    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+-    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+-    resolutions: ['720p', '1080p'],
+-    group: 'HappyHorse',
+-  },
+-
+-  // Jimeng（即梦）
+-  {
+-    id: 'nano-banana',
+-    name: 'nano-banana',
+-    provider: 'jimeng',
+-    modality: 'image',
+-    supportsEdit: true,
+-    group: 'Banana',
+-  },
+-  {
+-    id: 'nano-banana-2',
+-    name: 'nano-banana-2',
+-    provider: 'jimeng',
+-    modality: 'image',
+-    supportsEdit: true,
+-    async: true,
+-    group: 'Banana',
+-  },
+-  {
+-    id: 'nanobananapro',
+-    name: 'nanobananapro',
+-    provider: 'jimeng',
+-    modality: 'image',
+-    supportsEdit: true,
+-    group: 'Banana',
+-  },
+-  {
+-    id: 'jimeng-xl',
+-    name: 'jimeng-xl',
+-    provider: 'jimeng',
+-    modality: 'image',
+-    group: 'Jimeng',
+-  },
+-  {
+-    id: 'jimeng-xl-pro',
+-    name: 'jimeng-xl-pro',
+-    provider: 'jimeng',
+-    modality: 'image',
+-    group: 'Jimeng',
+-  },
+-  // Flux
+-  {
+-    id: 'flux-kontext',
+-    name: 'flux-kontext',
+-    provider: 'openai',
+-    modality: 'image',
+-    supportsEdit: true,
+-    group: 'Flux',
+-  },
+-  {
+-    id: 'flux-kontext-pro',
+-    name: 'flux-kontext-pro',
+-    provider: 'openai',
+-    modality: 'image',
+-    supportsEdit: true,
+-    group: 'Flux',
+-  },
+-  {
+-    id: 'flux-pro',
+-    name: 'flux-pro',
+-    provider: 'openai',
+-    modality: 'image',
+-    group: 'Flux',
+-  },
+-
+-  // Qwen
+-  {
+-    id: 'qwen-image',
+-    name: 'qwen-image',
+-    provider: 'qwen',
+-    modality: 'image',
+-    supportsEdit: true,
+-  },
+-
+-  // Yunwu (Gemini)
+-  {
+-    id: 'gemini-3-pro-image-preview',
+-    name: 'gemini-3-pro-image-preview',
+-    provider: 'yunwu',
+-    modality: 'image',
+-  },
+-
+-  // Midjourney
+-  { id: 'mj-v6', name: 'MJ V6', provider: 'midjourney', modality: 'image' },
+-
+-  // Deepseek
+-  {
+-    id: 'deepseek-v3-1',
+-    name: 'deepseek-v3-1-250821',
+-    provider: 'deepseek',
+-    modality: 'chat',
+-  },
+-];
+-
+-const BY_ID: Map<string, ModelDef> = new Map(DEFAULT_MODELS.map((m) => [m.id, m]));
+-
+-const USER_LIBRARY_KEY = 'pin_model_library';
+-const OVERRIDES_KEY = 'pin_model_overrides';
+-const LEGACY_USER_LIBRARY_KEYS = ['tapnow_model_library'];
+-const LEGACY_OVERRIDES_KEYS = ['tapnow_model_overrides'];
+-
+-/**
+- * 查找模型：先在 DEFAULT_MODELS 找；找不到读 localStorage 用户库 fallback。
+- * 不依赖 React state，可在 trigger / 非 hook 上下文调用。
+- */
+-export function getModelDef(id: string): ModelDef | undefined {
+-  const def = BY_ID.get(id);
+-  if (def) return applyModelOverride(id, def);
+-  try {
+-    const raw =
+-      typeof localStorage !== 'undefined'
+-        ? readLocalStorageItem(USER_LIBRARY_KEY, LEGACY_USER_LIBRARY_KEYS)
+-        : null;
+-    if (!raw) return undefined;
+-    const userModels = JSON.parse(raw) as ModelDef[];
+-    return Array.isArray(userModels) ? userModels.find((m) => m.id === id) : undefined;
+-  } catch {
+-    return undefined;
+-  }
+-}
+-
+-export function getModelDisplayName(model: Pick<ModelDef, 'displayName' | 'name' | 'id'>): string {
+-  return model.displayName || model.name || model.id;
+-}
+-
+-function applyModelOverride(id: string, model: ModelDef): ModelDef {
+-  try {
+-    const raw =
+-      typeof localStorage !== 'undefined'
+-        ? readLocalStorageItem(OVERRIDES_KEY, LEGACY_OVERRIDES_KEYS)
+-        : null;
+-    if (!raw) return model;
+-    const overrides = JSON.parse(raw) as Record<string, Partial<ModelDef>>;
+-    const override = overrides?.[id];
+-    return override ? { ...model, ...override } : model;
+-  } catch {
+-    return model;
+-  }
+-}
+-
+-function readLocalStorageItem(key: string, legacyKeys: string[]): string | null {
+-  const raw = localStorage.getItem(key);
+-  if (raw != null) return raw;
+-  for (const legacyKey of legacyKeys) {
+-    const legacy = localStorage.getItem(legacyKey);
+-    if (legacy != null) return legacy;
+-  }
+-  return null;
+-}
 +import type { ModelDef, ModelParameter } from '@/types/model';
 +
 +/** H3 的采样器/调度器取自 ComfyUI 的实际枚举，避免出现无效值。 */
@@ -675,8 +1052,8 @@ index 3946c03..d9c62a6 100644
 +    description: 'H3 默认 3，与视频 shift 共同决定两路调度的错位。',
 +  },
 +];
- 
- export const DEFAULT_MODELS: ModelDef[] = [
++
++export const DEFAULT_MODELS: ModelDef[] = [
 +  // 本地 MiniMax H3：无需任何 API 配置，开箱即用的默认渠道。
 +  {
 +    id: 'local-h3-image',
@@ -705,24 +1082,304 @@ index 3946c03..d9c62a6 100644
 +    parameters: H3_VIDEO_PARAMS,
 +  },
 +
-   // OpenAI 兼容网关（Wan 系列等）
-   {
-     id: 'wan2.7-image',
++  // OpenAI 兼容网关（Wan 系列等）
++  {
++    id: 'wan2.7-image',
++    name: 'wan2.7-image',
++    provider: 'openai',
++    modality: 'image',
++    ratios: ['1:1', '16:9', '9:16', '4:3', '3:4'],
++    resolutions: ['1024x1024'],
++    group: 'Wan',
++  },
++  {
++    id: 'wan2.7-image-pro',
++    name: 'wan2.7-image-pro',
++    provider: 'openai',
++    modality: 'image',
++    ratios: ['1:1', '16:9', '9:16', '4:3', '3:4'],
++    resolutions: ['1024x1024'],
++    group: 'Wan',
++  },
++
++  // OpenAI 同源
++  { id: 'gpt-4o', name: 'gpt-4o', provider: 'openai', modality: 'chat' },
++  { id: 'gpt-5.2', name: 'gpt-5.2', provider: 'openai', modality: 'chat' },
++  { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', provider: 'openai', modality: 'chat' },
++  {
++    id: 'gpt-4o-image',
++    name: 'gpt-4o-image',
++    provider: 'openai',
++    modality: 'image',
++    supportsEdit: true,
++  },
++
++  // Sora 视频
++  {
++    id: 'wan2.6-r2v-flash',
++    name: 'wan2.6-r2v-flash',
++    provider: 'openai',
++    modality: 'video',
++    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s'],
++    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
++    resolutions: ['720p', '1080p'],
++    group: 'Wan',
++  },
++  {
++    id: 'wan2.7-i2v',
++    name: 'wan2.7-i2v',
++    provider: 'openai',
++    modality: 'video',
++    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s'],
++    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
++    resolutions: ['720p', '1080p'],
++    group: 'Wan',
++  },
++  {
++    id: 'doubao-seedance-2-0-260128',
++    name: 'doubao-seedance-2-0-260128',
++    provider: 'openai',
++    modality: 'video',
++    async: true,
++    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s'],
++    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
++    resolutions: ['720p', '1080p'],
++    group: 'Seedance',
++  },
++  {
++    id: 'happyhorse-1.0-r2v',
++    name: 'happyhorse-1.0-r2v',
++    displayName: 'HappyHorse(多图参考)',
++    provider: 'openai',
++    modality: 'video',
++    async: true,
++    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
++    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
++    resolutions: ['720p', '1080p'],
++    group: 'HappyHorse',
++  },
++  {
++    id: 'happyhorse-1.0-t2v',
++    name: 'happyhorse-1.0-t2v',
++    displayName: 'HappyHorse(文生视频)',
++    provider: 'openai',
++    modality: 'video',
++    async: true,
++    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
++    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
++    resolutions: ['720p', '1080p'],
++    group: 'HappyHorse',
++  },
++  {
++    id: 'happyhorse-1.0-i2v',
++    name: 'happyhorse-1.0-i2v',
++    displayName: 'HappyHorse(图生视频)',
++    provider: 'openai',
++    modality: 'video',
++    async: true,
++    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
++    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
++    resolutions: ['720p', '1080p'],
++    group: 'HappyHorse',
++  },
++
++  // Jimeng（即梦）
++  {
++    id: 'nano-banana',
++    name: 'nano-banana',
++    provider: 'jimeng',
++    modality: 'image',
++    supportsEdit: true,
++    group: 'Banana',
++  },
++  {
++    id: 'nano-banana-2',
++    name: 'nano-banana-2',
++    provider: 'jimeng',
++    modality: 'image',
++    supportsEdit: true,
++    async: true,
++    group: 'Banana',
++  },
++  {
++    id: 'nanobananapro',
++    name: 'nanobananapro',
++    provider: 'jimeng',
++    modality: 'image',
++    supportsEdit: true,
++    group: 'Banana',
++  },
++  {
++    id: 'jimeng-xl',
++    name: 'jimeng-xl',
++    provider: 'jimeng',
++    modality: 'image',
++    group: 'Jimeng',
++  },
++  {
++    id: 'jimeng-xl-pro',
++    name: 'jimeng-xl-pro',
++    provider: 'jimeng',
++    modality: 'image',
++    group: 'Jimeng',
++  },
++  // Flux
++  {
++    id: 'flux-kontext',
++    name: 'flux-kontext',
++    provider: 'openai',
++    modality: 'image',
++    supportsEdit: true,
++    group: 'Flux',
++  },
++  {
++    id: 'flux-kontext-pro',
++    name: 'flux-kontext-pro',
++    provider: 'openai',
++    modality: 'image',
++    supportsEdit: true,
++    group: 'Flux',
++  },
++  {
++    id: 'flux-pro',
++    name: 'flux-pro',
++    provider: 'openai',
++    modality: 'image',
++    group: 'Flux',
++  },
++
++  // Qwen
++  {
++    id: 'qwen-image',
++    name: 'qwen-image',
++    provider: 'qwen',
++    modality: 'image',
++    supportsEdit: true,
++  },
++
++  // Yunwu (Gemini)
++  {
++    id: 'gemini-3-pro-image-preview',
++    name: 'gemini-3-pro-image-preview',
++    provider: 'yunwu',
++    modality: 'image',
++  },
++
++  // Midjourney
++  { id: 'mj-v6', name: 'MJ V6', provider: 'midjourney', modality: 'image' },
++
++  // Deepseek
++  {
++    id: 'deepseek-v3-1',
++    name: 'deepseek-v3-1-250821',
++    provider: 'deepseek',
++    modality: 'chat',
++  },
++];
++
++const BY_ID: Map<string, ModelDef> = new Map(DEFAULT_MODELS.map((m) => [m.id, m]));
++
++const USER_LIBRARY_KEY = 'pin_model_library';
++const OVERRIDES_KEY = 'pin_model_overrides';
++const LEGACY_USER_LIBRARY_KEYS = ['tapnow_model_library'];
++const LEGACY_OVERRIDES_KEYS = ['tapnow_model_overrides'];
++
++/**
++ * 查找模型：先在 DEFAULT_MODELS 找；找不到读 localStorage 用户库 fallback。
++ * 不依赖 React state，可在 trigger / 非 hook 上下文调用。
++ */
++export function getModelDef(id: string): ModelDef | undefined {
++  const def = BY_ID.get(id);
++  if (def) return applyModelOverride(id, def);
++  try {
++    const raw =
++      typeof localStorage !== 'undefined'
++        ? readLocalStorageItem(USER_LIBRARY_KEY, LEGACY_USER_LIBRARY_KEYS)
++        : null;
++    if (!raw) return undefined;
++    const userModels = JSON.parse(raw) as ModelDef[];
++    return Array.isArray(userModels) ? userModels.find((m) => m.id === id) : undefined;
++  } catch {
++    return undefined;
++  }
++}
++
++export function getModelDisplayName(model: Pick<ModelDef, 'displayName' | 'name' | 'id'>): string {
++  return model.displayName || model.name || model.id;
++}
++
++function applyModelOverride(id: string, model: ModelDef): ModelDef {
++  try {
++    const raw =
++      typeof localStorage !== 'undefined'
++        ? readLocalStorageItem(OVERRIDES_KEY, LEGACY_OVERRIDES_KEYS)
++        : null;
++    if (!raw) return model;
++    const overrides = JSON.parse(raw) as Record<string, Partial<ModelDef>>;
++    const override = overrides?.[id];
++    return override ? { ...model, ...override } : model;
++  } catch {
++    return model;
++  }
++}
++
++function readLocalStorageItem(key: string, legacyKeys: string[]): string | null {
++  const raw = localStorage.getItem(key);
++  if (raw != null) return raw;
++  for (const legacyKey of legacyKeys) {
++    const legacy = localStorage.getItem(legacyKey);
++    if (legacy != null) return legacy;
++  }
++  return null;
++}
 diff --git a/src/api/upstream.ts b/src/api/upstream.ts
-index b79c530..fb2e5a0 100644
+index b79c530..c483908 100644
 --- a/src/api/upstream.ts
 +++ b/src/api/upstream.ts
-@@ -8,8 +8,9 @@
-  */
- export const FIXED_BASE_URL = '';
- 
+@@ -1,21 +1,22 @@
+-/**
+- * 默认 API 基础地址。
+- *
+- * 开源版默认空字符串，要求用户在「设置 → 服务商配置」中显式填写自己的
+- * OpenAI 兼容网关地址（例如 https://api.openai.com 或自部署网关）。
+- *
+- * 留作兼容入口：旧版本通过 setPref('global_base_url', ...) 写入的值仍优先生效。
+- */
+-export const FIXED_BASE_URL = '';
+-
 -export const DEFAULT_IMAGE_MODEL = 'wan2.7-image';
+-export const DEFAULT_IMAGE_MODELS: readonly string[] = [
+-  'wan2.7-image',
+-  'wan2.7-image-pro',
+-];
+-
+-export function normalizeImageModelId(modelId: string | undefined): string {
+-  return modelId && DEFAULT_IMAGE_MODELS.includes(modelId)
+-    ? modelId
+-    : DEFAULT_IMAGE_MODEL;
+-}
++/**
++ * 默认 API 基础地址。
++ *
++ * 开源版默认空字符串，要求用户在「设置 → 服务商配置」中显式填写自己的
++ * OpenAI 兼容网关地址（例如 https://api.openai.com 或自部署网关）。
++ *
++ * 留作兼容入口：旧版本通过 setPref('global_base_url', ...) 写入的值仍优先生效。
++ */
++export const FIXED_BASE_URL = '';
++
 +export const DEFAULT_IMAGE_MODEL = 'local-h3-image';
- export const DEFAULT_IMAGE_MODELS: readonly string[] = [
++export const DEFAULT_IMAGE_MODELS: readonly string[] = [
 +  'local-h3-image',
-   'wan2.7-image',
-   'wan2.7-image-pro',
- ];
++  'wan2.7-image',
++  'wan2.7-image-pro',
++];
++
++export function normalizeImageModelId(modelId: string | undefined): string {
++  return modelId && DEFAULT_IMAGE_MODELS.includes(modelId)
++    ? modelId
++    : DEFAULT_IMAGE_MODEL;
++}
 diff --git a/src/canvas/Canvas.tsx b/src/canvas/Canvas.tsx
 index 4bca904..66210b0 100644
 --- a/src/canvas/Canvas.tsx
@@ -733,8 +1390,7 @@ index 4bca904..66210b0 100644
    type ReactNode,
 +  memo,
    useCallback,
-   useEffect,warning: in the working copy of 'src/canvas/useFlowNodes.ts', LF will be replaced by CRLF the next time Git touches it
-
+   useEffect,
    useMemo,
 @@ -29,6 +30,7 @@ import {
    useState,
@@ -841,8 +1497,7 @@ index 0000000..4c7d495
 +/**
 + * 把画布节点转换成 React Flow 节点，并保持未变化节点的对象引用不变。
 + *
-+ * 原实现每次都 `nodes.map(toFlowNode)` 重新构造全部对象。storwarning: in the working copy of 'src/components/LocalRuntimePanel.tsx', LF will be replaced by CRLF the next time Git touches it
-e 用的是 immer，
++ * 原实现每次都 `nodes.map(toFlowNode)` 重新构造全部对象。store 用的是 immer，
 + * 未改动的节点本身引用是稳定的，但这一步会把这份稳定性丢掉：任何一次改动
 + * （哪怕只是某个节点的进度百分比）都会让 React Flow 看到 100 个全新对象，
 + * 从而更新全部内部节点状态并重渲染所有节点外壳。
@@ -1234,34 +1889,2314 @@ index 0000000..4bbff53
 +  );
 +}
 diff --git a/src/hooks/useGenerationTrigger.ts b/src/hooks/useGenerationTrigger.ts
-index 8a2b367..523981f 100644
+index 8a2b367..2c4eebd 100644
 --- a/src/hooks/useGenerationTrigger.ts
 +++ b/src/hooks/useGenerationTrigger.ts
-@@ -1,6 +1,7 @@
- import { useCallback } from 'react';
- import { chatComplete, type ChatContent } from '@/api/chat';
- import { generateImage } from '@/api/images';
+@@ -1,1639 +1,1672 @@
+-import { useCallback } from 'react';
+-import { chatComplete, type ChatContent } from '@/api/chat';
+-import { generateImage } from '@/api/images';
+-import {
+-  fetchImageMaterialBlob,
+-  importImageUrlMaterial,
+-  uploadImageMaterial,
+-  uploadMaterial,
+-} from '@/api/media';
+-import { mjImagine, splitMjGrid } from '@/api/midjourney';
+-import { getModelDef } from '@/api/models';
+-import { routeRequest } from '@/api/model-routing';
+-import { buildSeedanceVideoVars, isSeedanceVideoModel } from '@/api/seedance';
+-import type { Vars } from '@/api/template';
+-import { FIXED_BASE_URL, normalizeImageModelId } from '@/api/upstream';
+-import {
+-  buildVideoRequest,
+-  type GenerateVideoOpts,
+-} from '@/api/videos';
+-import {
+-  getVideoTaskClientId,
+-  submitBackgroundVideoTask,
+-  waitForBackgroundVideoTask,
+-} from '@/api/video-tasks';
+-import {
+-  FEATURE_DISABLED_MESSAGE,
+-  isNodeFeatureEnabled,
+-} from '@/config/features';
+-import { useCanvas } from '@/store/canvas';
+-import { useHistory, type HistoryEntry, type HistoryKind } from '@/store/history';
+-import { useLibrary } from '@/store/library';
+-import { getPref } from '@/store/prefs';
+-import { useTasks } from '@/store/tasks';
+-import type { AppEdge } from '@/types/edge';
+-import type {
+-  AppNode,
+-  CharacterCardNode,
+-  ExtractCharactersScenesNode,
+-  ExpressionType,
+-  GenerateCharacterImageNode,
+-  GenerateCharacterVideoNode,
+-  GenerateSceneImageNode,
+-  GenerateSceneVideoNode,
+-  GenImageNode,
+-  GenVideoNode,
+-  NodeId,
+-  NodeKind,
+-  VideoAnalyzeNode,
+-} from '@/types/node';
+-import type { ModelDef } from '@/types/model';
+-import { splitImageBatch } from '@/utils/batch';
+-import { blobToDataURL, urlToBlob } from '@/utils/image';
+-import { edgeId } from '@/utils/id';
+-import { createImageCompareNode, createVideoPreviewNode } from '@/canvas/factory';
+-import { getResultNodePosition } from '@/canvas/resultLayout';
+-import { composeCharacterCard } from '@/utils/characterCard';
+-import { resolveUpstream } from './useUpstream';
+-import { resolveProviderConfig } from '@/utils/providerConfig';
+-
+-export interface TriggerResult {
+-  taskId: string;
+-}
+-
+-type PatchFn = (id: NodeId, p: { content: string }) => void;
+-
+-function imageResultToUrl(item: { url?: string; b64_json?: string }): string | undefined {
+-  if (item.url) return item.url;
+-  if (item.b64_json) return `data:image/png;base64,${item.b64_json}`;
+-  return undefined;
+-}
+-
+-async function persistImageUrl(url: string, name: string): Promise<string> {
+-  if (isLocalImageUrl(url)) {
+-    const blob = await loadImageBlob(url);
+-    return uploadImageMaterial(blob, ensureImageFilename(name, blob.type));
+-  }
+-  if (isHttpUrl(url)) {
+-    // 对于 HTTP URL，直接让后端导入
+-    // 避免浏览器 CORS 问题
+-    return importImageUrlMaterial(url, ensureImageFilename(name));
+-  }
+-  throw new Error(`不支持的图片地址: ${url.slice(0, 48)}`);
+-}
+-
+-async function persistImageUrls(urls: string[], prefix: string): Promise<string[]> {
+-  return Promise.all(urls.map((url, index) => persistImageUrl(url, `${prefix}-${index + 1}`)));
+-}
+-
+-interface MediaRuntime {
+-  baseUrl?: string;
+-  apiKey?: string;
+-}
+-
+-async function persistMediaUrl(
+-  url: string,
+-  name: string,
+-  runtime: MediaRuntime = {},
+-): Promise<string> {
+-  if (isLocalImageUrl(url)) {
+-    const blob = await loadImageBlob(url);
+-    return uploadMaterial(blob, ensureMediaFilename(name, blob.type), runtime);
+-  }
+-  if (isHttpUrl(url)) return url;
+-  throw new Error(`不支持的素材地址: ${url.slice(0, 48)}`);
+-}
+-
+-async function prepareAudioUrls(
+-  urls: string[],
+-  runtime: MediaRuntime = {},
+-): Promise<string[]> {
+-  return Promise.all(
+-    urls.filter(Boolean).map((url, index) => persistMediaUrl(url, `audio-${index + 1}`, runtime)),
+-  );
+-}
+-
+-async function loadImageBlob(url: string): Promise<Blob> {
+-  if (isHttpUrl(url)) return fetchImageMaterialBlob(url);
+-  return urlToBlob(url);
+-}
+-
+-async function prepareReferenceInputs(
+-  urls: string[],
+-  options: { includeBlobs: boolean },
+-): Promise<{ imageUrls: string[]; blobs?: Blob[] }> {
+-  const imageUrls = await prepareReferenceImageUrls(urls);
+-  if (!options.includeBlobs) return { imageUrls };
+-  return {
+-    imageUrls,
+-    blobs: await Promise.all(imageUrls.map(loadImageBlob)),
+-  };
+-}
+-
+-function isLocalImageUrl(url: string): boolean {
+-  return url.startsWith('data:') || url.startsWith('blob:');
+-}
+-
+-function isHttpUrl(url: string): boolean {
+-  return url.startsWith('http://') || url.startsWith('https://');
+-}
+-
+-function ensureImageFilename(name: string, contentType = 'image/png'): string {
+-  if (/\.[a-z0-9]{1,8}$/i.test(name)) return name;
+-  return `${name}${extensionFromContentType(contentType)}`;
+-}
+-
+-function ensureMediaFilename(name: string, contentType = 'application/octet-stream'): string {
+-  if (/\.[a-z0-9]{1,8}$/i.test(name)) return name;
+-  return `${name}${extensionFromContentType(contentType)}`;
+-}
+-
+-function extensionFromContentType(contentType: string): string {
+-  const type = contentType.toLowerCase().split(';')[0].trim();
+-  if (type === 'image/jpeg') return '.jpg';
+-  if (type === 'image/webp') return '.webp';
+-  if (type === 'image/gif') return '.gif';
+-  if (type === 'audio/mpeg') return '.mp3';
+-  if (type === 'audio/wav' || type === 'audio/wave' || type === 'audio/x-wav') return '.wav';
+-  if (type === 'audio/ogg') return '.ogg';
+-  if (type === 'audio/aac') return '.aac';
+-  if (type === 'audio/mp4' || type === 'audio/x-m4a') return '.m4a';
+-  if (type === 'video/mp4') return '.mp4';
+-  return '.png';
+-}
+-
+-function resolveImageSize(settings: {
+-  resolution?: string;
+-  width?: number | '';
+-  height?: number | '';
+-}): string {
+-  const width = clampImageDimension(settings.width);
+-  const height = clampImageDimension(settings.height);
+-  if (width && height) return `${width}x${height}`;
+-  return settings.resolution ?? '1024x1024';
+-}
+-
+-function resolveVideoSizeForModel(
+-  modelId: string,
+-  ratio?: string,
+-  resolution?: string,
+-): string | undefined {
+-  if (isKlingVideoModel(modelId)) return ratioToKlingSize(ratio);
+-  if (isSeedanceVideoModel(modelId)) return ratioToKlingSize(ratio);
+-  if (isHappyHorseVideoModel(modelId)) return undefined;
+-  return resolution || '720p';
+-}
+-
+-function resolveVideoResolutionForModel(modelId: string, resolution?: string): string {
+-  const value = normalizeVideoResolution(resolution);
+-  return isHappyHorseVideoModel(modelId) ? normalizeHappyHorseResolution(value) : value;
+-}
+-
+-function happyHorseMetadataForModel(
+-  modelId: string,
+-  ratio?: string,
+-  resolution?: string,
+-): Record<string, unknown> | undefined {
+-  if (!isHappyHorseVideoModel(modelId)) return undefined;
+-  const parameters: Record<string, unknown> = {
+-    resolution: normalizeHappyHorseResolution(resolution),
+-  };
+-  if (isHappyHorseRatioModel(modelId)) {
+-    parameters.ratio = resolveVideoRatio(ratio);
+-  }
+-  return { parameters };
+-}
+-
+-function mergeVideoMetadata(
+-  base: unknown,
+-  patch: Record<string, unknown> | undefined,
+-): Record<string, unknown> | undefined {
+-  if (!patch)
+-    return base && typeof base === 'object' && !Array.isArray(base)
+-      ? { ...(base as Record<string, unknown>) }
+-      : undefined;
+-  if (!base || typeof base !== 'object' || Array.isArray(base)) return patch;
+-  return { ...(base as Record<string, unknown>), ...patch };
+-}
+-
+-function audioReferenceMetadata(audioUrls: string[]): Record<string, unknown> | undefined {
+-  if (audioUrls.length === 0) return undefined;
+-  return {
+-    audio_urls: audioUrls,
+-    reference_audio_urls: audioUrls,
+-    audio_url: audioUrls[0],
+-  };
+-}
+-
+-function isHappyHorseVideoModel(modelId: string): boolean {
+-  return modelId.toLowerCase().startsWith('happyhorse-1.0-');
+-}
+-
+-function isHappyHorseTextToVideoModel(modelId: string): boolean {
+-  return modelId.toLowerCase() === 'happyhorse-1.0-t2v';
+-}
+-
+-function isHappyHorseImageToVideoModel(modelId: string): boolean {
+-  return modelId.toLowerCase() === 'happyhorse-1.0-i2v';
+-}
+-
+-function isHappyHorseReferenceToVideoModel(modelId: string): boolean {
+-  return modelId.toLowerCase() === 'happyhorse-1.0-r2v';
+-}
+-
+-function isHappyHorseRatioModel(modelId: string): boolean {
+-  const name = modelId.toLowerCase();
+-  return name === 'happyhorse-1.0-t2v' || name === 'happyhorse-1.0-r2v';
+-}
+-
+-function validateHappyHorseVideoInputs(
+-  modelId: string,
+-  imageCount: number,
+-  hasVideoRef: boolean,
+-  videoMode: 'first-last-frame' | 'omni-reference',
+-): void {
+-  if (!isHappyHorseVideoModel(modelId)) return;
+-  if (videoMode === 'first-last-frame') {
+-    throw new Error('HappyHorse 不支持首尾帧模式，请切换为全能参考');
+-  }
+-  if (isHappyHorseTextToVideoModel(modelId)) {
+-    if (imageCount > 0 || hasVideoRef) {
+-      throw new Error('HappyHorse 文生视频不支持参考素材，请断开参考图/视频');
+-    }
+-    return;
+-  }
+-  if (isHappyHorseImageToVideoModel(modelId)) {
+-    if (hasVideoRef) {
+-      throw new Error('HappyHorse 图生视频仅支持 1 张首帧图片，不支持参考视频');
+-    }
+-    if (imageCount !== 1) {
+-      throw new Error('HappyHorse 图生视频需要且仅支持 1 张首帧图片');
+-    }
+-    return;
+-  }
+-  if (isHappyHorseReferenceToVideoModel(modelId)) {
+-    if (hasVideoRef) {
+-      throw new Error('HappyHorse 多图参考仅支持参考图片，不支持参考视频');
+-    }
+-    if (imageCount < 1 || imageCount > 9) {
+-      throw new Error('HappyHorse 多图参考需要 1-9 张参考图片');
+-    }
+-  }
+-}
+-
+-function normalizeHappyHorseResolution(resolution?: string): string {
+-  const value = String(resolution || '720p').trim().toUpperCase();
+-  if (value === '1080' || value === '1080P') return '1080P';
+-  return '720P';
+-}
+-
+-function normalizeVideoResolution(resolution?: string): string {
+-  const value = String(resolution || '720p').trim().toLowerCase();
+-  return value === '1080p' || value === '1080' ? '1080p' : '720p';
+-}
+-
+-function resolveVideoDuration(modelId: string, duration?: string | number): string {
+-  const parsed = typeof duration === 'number' ? duration : parseInt(String(duration ?? '5s'), 10);
+-  const value = Number.isFinite(parsed) ? parsed : 5;
+-  const isHappyHorse = modelId.toLowerCase().startsWith('happyhorse-1.0-');
+-  const min = isHappyHorse ? 3 : 4;
+-  const max = isHappyHorse ? 15 : 10;
+-  return `${Math.min(max, Math.max(min, value))}s`;
+-}
+-
+-function resolveVideoRatio(ratio?: string): string {
+-  const value = ratio || '16:9';
+-  if (['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'].includes(value)) return value;
+-  return '16:9';
+-}
+-
+-function ratioToKlingSize(ratio = '16:9'): string {
+-  switch (ratio) {
+-    case '9:16':
+-      return '720x1280';
+-    case '1:1':
+-      return '1024x1024';
+-    case '4:3':
+-      return '1024x768';
+-    case '3:4':
+-      return '768x1024';
+-    case '21:9':
+-      return '1280x720';
+-    case '16:9':
+-    default:
+-      return '1280x720';
+-  }
+-}
+-
+-function isKlingVideoModel(modelId: string): boolean {
+-  return modelId.toLowerCase().includes('kling');
+-}
+-
+-function isWan27I2VModel(modelId: string): boolean {
+-  const name = modelId.toLowerCase();
+-  return name.startsWith('wan2.7') && name.includes('i2v');
+-}
+-
+-function wan27MediaMetadata(
+-  imageUrls: string[],
+-  videoUrl: string | null,
+-  mode: 'first-last-frame' | 'omni-reference',
+-): Record<string, unknown> | undefined {
+-  const media: Array<{ type: string; url: string }> = [];
+-  if (mode === 'first-last-frame') {
+-    if (imageUrls[0]) media.push({ type: 'first_frame', url: imageUrls[0] });
+-    if (imageUrls[1]) media.push({ type: 'last_frame', url: imageUrls[1] });
+-  } else {
+-    if (imageUrls[0]) media.push({ type: 'first_frame', url: imageUrls[0] });
+-    if (videoUrl) media.push({ type: 'first_clip', url: videoUrl });
+-  }
+-  if (media.length === 0) return undefined;
+-  return { input: { media } };
+-}
+-
+-function klingNativeInput(
+-  prompt: string,
+-  imageUrls: string[],
+-  videoUrl: string | null,
+-  mode: 'first-last-frame' | 'omni-reference',
+-): Record<string, unknown> {
+-  const input: Record<string, unknown> = { prompt };
+-  const media: Array<Record<string, unknown>> = [];
+-  if (mode === 'first-last-frame') {
+-    if (imageUrls[0]) media.push({ type: 'first_frame', url: imageUrls[0] });
+-    if (imageUrls[1]) media.push({ type: 'last_frame', url: imageUrls[1] });
+-  } else {
+-    for (const url of imageUrls) media.push({ type: 'refer', url });
+-    if (videoUrl) media.push({ type: 'base', url: videoUrl, keep_original_sound: 'yes' });
+-  }
+-  if (media.length > 0) input.media = media;
+-  return input;
+-}
+-
+-function klingNativeParameters(
+-  ratio?: string,
+-  resolution?: string,
+-  duration?: string | number,
+-): Record<string, unknown> {
+-  const params: Record<string, unknown> = {
+-    aspect_ratio: ratioToKlingAspect(ratio),
+-    duration: durationToNumber(duration),
+-    quality: resolution === '1080p' ? 'pro' : 'std',
+-  };
+-  return params;
+-}
+-
+-function ratioToKlingAspect(ratio = '16:9'): string {
+-  if (ratio === '9:16' || ratio === '1:1') return ratio;
+-  if (ratio === '3:4') return '9:16';
+-  return '16:9';
+-}
+-
+-function durationToNumber(duration: string | number | undefined): number {
+-  if (typeof duration === 'number' && Number.isFinite(duration)) return duration;
+-  const parsed = parseInt(String(duration ?? '5s'), 10);
+-  return Number.isNaN(parsed) ? 5 : parsed;
+-}
+-
+-function clampImageDimension(value: number | '' | undefined): number | null {
+-  if (!Number.isFinite(value)) return null;
+-  const rounded = Math.round(Number(value));
+-  return Math.min(4096, Math.max(64, rounded));
+-}
+-
+-function resolveImageQuality(value?: string): string {
+-  if (value === 'high') return 'high';
+-  if (value === 'medium') return 'medium';
+-  if (value === 'low') return 'low';
+-  return 'standard';
+-}
+-
+-interface RunResult {
+-  kind: HistoryKind;
+-  model: string;
+-  prompt?: string;
+-  contentUrl?: string;
+-  contentUrls?: string[];
+-  sizeDesc?: string;
+-  refsCount?: number;
+-}
+-
+-const IMAGE_RESULT_NODE_KINDS = new Set<NodeKind>([
+-  'gen-image',
+-  'generate-character-image',
+-  'generate-scene-image',
+-  'character-card',
+-]);
+-
+-type HistoryDraft = Omit<HistoryEntry, 'id' | 'timestamp'>;
+-
+-function loadRuntime(model?: ModelDef): { apiKey: string; baseUrl: string } {
+-  // 如果提供了模型，尝试从模型的服务商配置中读取
+-  if (model) {
+-    const providerConfig = resolveProviderConfig(model);
+-    if (providerConfig) {
+-      return {
+-        apiKey: providerConfig.apiKey,
+-        baseUrl: providerConfig.baseUrl,
+-      };
+-    }
+-  }
+-
+-  // 回退到全局配置（兼容旧版本）
+-  const apiKey = String(getPref('global_key', ''));
+-  const baseUrl = String(getPref('global_base_url', FIXED_BASE_URL));
+-
+-  if (!apiKey) {
+-    throw new Error('API Key 未配置（请在设置中配置服务商或全局 API Key）');
+-  }
+-
+-  return { apiKey, baseUrl };
+-}
+-
+-function createPendingHistory(
+-  node: AppNode,
+-  nodes: AppNode[],
+-  edges: AppEdge[],
+-): HistoryEntry | null {
+-  const draft = getPendingHistoryDraft(node, nodes, edges);
+-  if (!draft) return null;
+-  return useHistory.getState().create({ ...draft, status: 'pending' });
+-}
+-
+-async function runVideoViaBackgroundTask(
+-  opts: GenerateVideoOpts & {
+-    nodeId: NodeId;
+-    historyEntryId?: string;
+-    modelId: string;
+-  },
+-): Promise<string> {
+-  const request = buildVideoRequest(opts);
+-  const submitted = await submitBackgroundVideoTask({
+-    clientId: getVideoTaskClientId(),
+-    nodeId: opts.nodeId,
+-    historyEntryId: opts.historyEntryId,
+-    model: opts.modelId,
+-    baseUrl: opts.baseUrl,
+-    apiKey: opts.apiKey ?? '',
+-    request,
+-  });
+-  const completed = await waitForBackgroundVideoTask(submitted.id);
+-  if (!completed.resultUrl) throw new Error('后台视频任务完成但缺少结果 URL');
+-  return completed.resultUrl;
+-}
+-
+-function getPendingHistoryDraft(
+-  node: AppNode,
+-  nodes: AppNode[],
+-  edges: AppEdge[],
+-): HistoryDraft | null {
+-  if (node.kind === 'gen-image') {
+-    const upstream = resolveUpstream(node.id, nodes, edges);
+-    const modelId = normalizeImageModelId(node.settings.model);
+-    return {
+-      nodeId: node.id,
+-      nodeKind: node.kind,
+-      kind: 'image',
+-      model: modelId,
+-      prompt: upstream.prompt || node.settings.prompt,
+-      sizeDesc: `${node.settings.ratio ?? '1:1'} · ${resolveImageSize(node.settings)} · ${node.settings.count ?? 1}张`,
+-      refsCount: upstream.referenceImages.length,
+-    };
+-  }
+-
+-  if (node.kind === 'gen-video') {
+-    const upstream = resolveUpstream(node.id, nodes, edges);
+-    return {
+-      nodeId: node.id,
+-      nodeKind: node.kind,
+-      kind: 'video',
+-      model: node.settings.model,
+-      prompt: upstream.prompt || node.settings.videoPrompt,
+-      sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${node.settings.resolution ?? '720p'}`,
+-      refsCount: upstream.referenceImages.length,
+-    };
+-  }
+-
+-  if (node.kind === 'generate-character-image' || node.kind === 'generate-scene-image') {
+-    return {
+-      nodeId: node.id,
+-      nodeKind: node.kind,
+-      kind: 'image',
+-      model: normalizeImageModelId(node.settings.model),
+-      prompt: node.settings.prompt,
+-      sizeDesc: `${node.settings.ratio ?? '1:1'} · ${node.settings.resolution ?? '1024x1024'}`,
+-    };
+-  }
+-
+-  if (node.kind === 'generate-character-video' || node.kind === 'generate-scene-video') {
+-    return {
+-      nodeId: node.id,
+-      nodeKind: node.kind,
+-      kind: 'video',
+-      model: node.settings.model,
+-      prompt: node.settings.videoPrompt,
+-      sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${node.settings.resolution ?? '720p'}`,
+-    };
+-  }
+-
+-  return null;
+-}
+-
+-async function runImageGen(
+-  node: GenImageNode,
+-  nodes: AppNode[],
+-  edges: AppEdge[],
+-): Promise<RunResult> {
+-  const modelId = normalizeImageModelId(node.settings.model);
+-  const model = getModelDef(modelId);
+-  if (!model) throw new Error(`未知模型: ${modelId}`);
+-
+-  const { apiKey, baseUrl } = loadRuntime(model);
+-
+-  const upstream = resolveUpstream(node.id, nodes, edges);
+-  const refs = upstream.referenceImages;
+-  const finalPrompt = upstream.prompt || node.settings.prompt;
+-  if (!finalPrompt) {
+-    throw new Error('prompt 为空（节点 prompt 与上游 text 节点均无内容）');
+-  }
+-
+-  if (model.provider === 'midjourney') {
+-    const task = await mjImagine({ baseUrl, apiKey, prompt: finalPrompt });
+-    const original = task.imageUrl;
+-    if (!original) throw new Error('MJ 返回无 imageUrl');
+-    let images: string[];
+-    try {
+-      images = await splitMjGrid(original);
+-    } catch {
+-      images = [original];
+-    }
+-    const storedImages = await persistImageUrls(images, 'mj-image');
+-    useCanvas.getState().patchNode(node.id, {
+-      content: storedImages[0],
+-      generatedImages: storedImages,
+-      mjImages: storedImages,
+-      mjOriginalUrl: original,
+-      mjNeedsSplit: false,
+-    });
+-    return {
+-      kind: 'image',
+-      model: model.id,
+-      prompt: finalPrompt,
+-      contentUrl: storedImages[0],
+-      contentUrls: storedImages,
+-      sizeDesc: 'MJ · 4-split',
+-      refsCount: refs.length,
+-    };
+-  }
+-
+-  const ctx = {
+-    hasReferenceImages: refs.length > 0,
+-    hasMask: !!upstream.mask,
+-    useJimengLocalFile: Boolean(getPref('jimeng_use_local_file', false)),
+-  };
+-  const needsFileInput = routeRequest({ type: 'image' }, model, ctx).bodyKind === 'form';
+-  const count = node.settings.count ?? 1;
+-  const baseVars: Vars = {
+-    modelName: model.name,
+-    prompt: finalPrompt,
+-    size: resolveImageSize(node.settings),
+-    ratio: node.settings.ratio ?? '1:1',
+-    quality: resolveImageQuality(node.settings.quality),
+-    enableSequential: false,
+-  };
+-  if (refs.length > 0) {
+-    const { imageUrls, blobs } = await prepareReferenceInputs(refs, {
+-      includeBlobs: needsFileInput,
+-    });
+-    baseVars.imageUrls = imageUrls;
+-    if (blobs) baseVars.image = blobs;
+-  }
+-  if (upstream.mask && needsFileInput) baseVars.mask = await loadImageBlob(upstream.mask);
+-
+-  const images: string[] = [];
+-  for (const n of splitImageBatch(count)) {
+-    const result = await generateImage({
+-      model,
+-      baseUrl,
+-      apiKey,
+-      vars: { ...baseVars, n },
+-      ctx,
+-    });
+-    images.push(...result.data.map(imageResultToUrl).filter((url): url is string => !!url));
+-  }
+-  const content = images[0];
+-  if (!content) throw new Error('生成结果无 url / b64_json');
+-  const storedImages = await persistImageUrls(images, 'generated-image');
+-  const storedContent = storedImages[0];
+-  if (!storedContent) throw new Error('生成结果持久化失败');
+-  useCanvas
+-    .getState()
+-    .patchNode(node.id, { content: storedContent, generatedImages: storedImages, mjImages: undefined });
+-  return {
+-    kind: 'image',
+-    model: model.id,
+-    prompt: finalPrompt,
+-    contentUrl: storedContent,
+-    contentUrls: storedImages,
+-    sizeDesc: `${node.settings.ratio ?? '1:1'} · ${resolveImageSize(node.settings)} · ${storedImages.length}张`,
+-    refsCount: refs.length,
+-  };
+-}
+-
+-async function runVideoGen(
+-  node: GenVideoNode,
+-  nodes: AppNode[],
+-  edges: AppEdge[],
+-  patch: PatchFn,
+-  historyEntryId?: string,
+-): Promise<RunResult> {
+-  const model = getModelDef(node.settings.model);
+-  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
+-
+-  const { apiKey, baseUrl } = loadRuntime(model);
+-
+-  const upstream = resolveUpstream(node.id, nodes, edges);
+-  const finalPrompt = upstream.prompt || node.settings.videoPrompt;
+-  if (!finalPrompt) throw new Error('video prompt 为空');
+-
+-  const ctx = {
+-    hasReferenceImages: upstream.referenceImages.length > 0 || upstream.audioUrls.length > 0,
+-    hasMask: false,
+-    useJimengLocalFile: false,
+-  };
+-  const videoMode = node.settings.videoMode ?? 'omni-reference';
+-  if (isWan27I2VModel(model.id) && videoMode === 'omni-reference') {
+-    throw new Error('wan2.7-i2v 不支持全能参考模式，请切换为首尾帧或选择可灵模型');
+-  }
+-  validateHappyHorseVideoInputs(
+-    model.id,
+-    upstream.referenceImages.length,
+-    Boolean(upstream.videoUrl),
+-    videoMode,
+-  );
+-  const vars: Vars = {
+-    modelName: model.name,
+-    prompt: finalPrompt,
+-    duration: resolveVideoDuration(model.id, node.settings.duration),
+-    size: resolveVideoSizeForModel(model.id, node.settings.ratio, node.settings.resolution),
+-    ratio: resolveVideoRatio(node.settings.ratio),
+-    resolution: resolveVideoResolutionForModel(model.id, node.settings.resolution),
+-  };
+-  vars.metadata = happyHorseMetadataForModel(
+-    model.id,
+-    node.settings.ratio,
+-    node.settings.resolution,
+-  );
+-  const audioUrls =
+-    upstream.audioUrls.length > 0
+-      ? await prepareAudioUrls(upstream.audioUrls, { baseUrl, apiKey })
+-      : [];
+-  vars.metadata = mergeVideoMetadata(vars.metadata, audioReferenceMetadata(audioUrls));
+-  vars.mode = videoMode === 'first-last-frame' ? 'first_last_frame' : 'multi_ref';
+-  if (isSeedanceVideoModel(model.id)) {
+-    const imageUrls =
+-      upstream.referenceImages.length > 0
+-        ? await prepareReferenceImageUrls(upstream.referenceImages)
+-        : [];
+-    const seedanceVars = buildSeedanceVideoVars({
+-      modelName: model.name,
+-      prompt: finalPrompt,
+-      duration: resolveVideoDuration(model.id, node.settings.duration),
+-      ratio: resolveVideoRatio(node.settings.ratio),
+-      resolution: resolveVideoResolutionForModel(model.id, node.settings.resolution),
+-      imageUrls,
+-      videoUrl: upstream.videoUrl,
+-      audioUrls,
+-      mode: videoMode,
+-    });
+-    const url = await runVideoViaBackgroundTask({
+-      model,
+-      baseUrl,
+-      apiKey,
+-      vars: seedanceVars,
+-      ctx,
+-      nodeId: node.id,
+-      historyEntryId,
+-      modelId: model.id,
+-    });
+-    if (!url) throw new Error('鐢熸垚缁撴灉鏃?url');
+-    patch(node.id, { content: url });
+-    return {
+-      kind: 'video',
+-      model: model.id,
+-      prompt: finalPrompt,
+-      contentUrl: url,
+-      sizeDesc: `${seedanceVars.duration}s 路 ${seedanceVars.ratio} 路 ${seedanceVars.resolution}`,
+-      refsCount: upstream.referenceImages.length,
+-    };
+-  }
+-  if (videoMode === 'first-last-frame') {
+-    if (upstream.referenceImages.length < 2) {
+-      throw new Error('首尾帧模式需要连接至少 2 张参考图');
+-    }
+-    const imageUrls = await prepareReferenceImageUrls(upstream.referenceImages.slice(0, 2));
+-    if (isKlingVideoModel(model.id)) {
+-      vars.input = klingNativeInput(finalPrompt, imageUrls, null, videoMode);
+-      vars.parameters = klingNativeParameters(
+-        node.settings.ratio,
+-        vars.resolution as string,
+-        vars.duration as string,
+-      );
+-    } else if (isWan27I2VModel(model.id)) {
+-      vars.metadata = mergeVideoMetadata(vars.metadata, wan27MediaMetadata(imageUrls, null, videoMode));
+-    } else {
+-      vars.imageUrls = imageUrls;
+-    }
+-  } else {
+-    let imageUrls: string[] = [];
+-    if (upstream.referenceImages.length > 0) {
+-      imageUrls = await prepareReferenceImageUrls(upstream.referenceImages);
+-    }
+-    if (isWan27I2VModel(model.id)) {
+-      if (imageUrls.length > 1) {
+-        throw new Error('wan2.7-i2v 全能参考不支持多张图片；请改用可灵全能参考，或只连接 1 张图片');
+-      }
+-      vars.metadata = mergeVideoMetadata(
+-        vars.metadata,
+-        wan27MediaMetadata(imageUrls, upstream.videoUrl, videoMode),
+-      );
+-    } else if (isKlingVideoModel(model.id)) {
+-      vars.input = klingNativeInput(finalPrompt, imageUrls, upstream.videoUrl, videoMode);
+-      vars.parameters = klingNativeParameters(
+-        node.settings.ratio,
+-        vars.resolution as string,
+-        vars.duration as string,
+-      );
+-    } else {
+-      if (imageUrls.length === 1) {
+-        vars.primaryImageUrl = imageUrls[0];
+-      } else if (imageUrls.length > 1) {
+-        vars.imageUrls = imageUrls;
+-      }
+-      if (upstream.videoUrl) {
+-        vars.metadata = mergeVideoMetadata(
+-          vars.metadata,
+-          model.id === 'happyhorse-1.0-video-edit'
+-            ? { input: { media: [{ type: 'first_clip', url: upstream.videoUrl }] } }
+-            : { video_urls: [upstream.videoUrl] },
+-        );
+-      }
+-    }
+-  }
+-
+-  const url = await runVideoViaBackgroundTask({
+-    model,
+-    baseUrl,
+-    apiKey,
+-    vars,
+-    ctx,
+-    nodeId: node.id,
+-    historyEntryId,
+-    modelId: model.id,
+-  });
+-  if (!url) throw new Error('生成结果无 url');
+-  patch(node.id, { content: url });
+-  return {
+-    kind: 'video',
+-    model: model.id,
+-    prompt: finalPrompt,
+-    contentUrl: url,
+-    sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${node.settings.resolution ?? '720p'}`,
+-    refsCount: upstream.referenceImages.length,
+-  };
+-}
+-
+-async function runVideoAnalyze(
+-  node: VideoAnalyzeNode,
+-  nodes: AppNode[],
+-  edges: AppEdge[],
+-): Promise<void> {
+-  const model = getModelDef(node.settings.model);
+-  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
+-
+-  const { apiKey, baseUrl } = loadRuntime(model);
+-
+-  const upstream = resolveUpstream(node.id, nodes, edges);
+-  const frames = upstream.videoFrames;
+-  if (frames.length === 0) {
+-    throw new Error('上游 video-input 需要先截取关键帧');
+-  }
+-  const instruction =
+-    node.settings.instruction?.trim() ||
+-    '请按时间顺序描述以下视频关键帧组成的内容（人物 / 动作 / 场景变化）。';
+-
+-  const userContent: ChatContent = [
+-    { type: 'text', text: instruction },
+-    ...frames.slice(0, 16).map((f) => ({
+-      type: 'image_url' as const,
+-      image_url: { url: f.url },
+-    })),
+-  ];
+-
+-  const result = await chatComplete({
+-    model,
+-    baseUrl,
+-    apiKey,
+-    messages: [
+-      { role: 'system', content: '你是视频分析助手。回答简洁、结构化。' },
+-      { role: 'user', content: userContent },
+-    ],
+-  });
+-  const text = result.choices[0]?.message?.content;
+-  if (!text) throw new Error('chat 返回空内容');
+-  useCanvas.getState().patchSettings<'video-analyze'>(node.id, { analysisResult: text });
+-}
+-
+-async function prepareReferenceImageUrls(urls: string[]): Promise<string[]> {
+-  return Promise.all(
+-    urls.slice(0, 5).map(async (url, index) => {
+-      if (isHttpUrl(url)) return url;
+-      if (url.startsWith('data:')) return url;
+-      if (url.startsWith('blob:')) return blobToDataURL(await loadImageBlob(url));
+-      return persistImageUrl(url, `reference-${index + 1}`);
+-    }),
+-  );
+-}
+-
+-async function runGenerateCharacterImage(
+-  node: GenerateCharacterImageNode,
+-  patch: PatchFn,
+-): Promise<RunResult> {
+-  const { apiKey, baseUrl } = loadRuntime();
+-  const modelId = normalizeImageModelId(node.settings.model);
+-  const model = getModelDef(modelId);
+-  if (!model) throw new Error(`未知模型: ${modelId}`);
+-  const charId = node.settings.characterId;
+-  if (!charId) throw new Error('未选择角色');
+-  const character = useLibrary.getState().characters.find((c) => c.id === charId);
+-  if (!character) throw new Error('角色不存在（可能被删除）');
+-
+-  const promptParts = [character.prompt || character.description, node.settings.prompt].filter(
+-    Boolean,
+-  );
+-  const finalPrompt = promptParts.join('\n').trim();
+-  if (!finalPrompt) throw new Error('角色 prompt/description 与节点 prompt 都为空');
+-
+-  const vars: Vars = {
+-    modelName: model.name,
+-    prompt: finalPrompt,
+-    n: 1,
+-    size: node.settings.resolution ?? '1024x1024',
+-    ratio: node.settings.ratio ?? '1:1',
+-    quality: 'standard',
+-    enableSequential: false,
+-  };
+-  const result = await generateImage({
+-    model,
+-    baseUrl,
+-    apiKey,
+-    vars,
+-    ctx: { hasReferenceImages: false, hasMask: false, useJimengLocalFile: false },
+-  });
+-  const content = imageResultToUrl(result.data[0] ?? {});
+-  if (!content) throw new Error('生成结果无 url / b64_json');
+-  const storedContent = await persistImageUrl(content, 'character-image');
+-  patch(node.id, { content: storedContent });
+-  // 同步回 library
+-  await useLibrary.getState().patchCharacter(charId, { imageUrl: storedContent });
+-  return {
+-    kind: 'image',
+-    model: model.id,
+-    prompt: finalPrompt,
+-    contentUrl: storedContent,
+-    contentUrls: [storedContent],
+-    sizeDesc: `${node.settings.ratio ?? '1:1'} · ${node.settings.resolution ?? '1024'} · ${character.name}`,
+-  };
+-}
+-
+-async function runGenerateSceneImage(
+-  node: GenerateSceneImageNode,
+-  patch: PatchFn,
+-): Promise<RunResult> {
+-  const { apiKey, baseUrl } = loadRuntime();
+-  const modelId = normalizeImageModelId(node.settings.model);
+-  const model = getModelDef(modelId);
+-  if (!model) throw new Error(`未知模型: ${modelId}`);
+-  const sceneId = node.settings.sceneId;
+-  if (!sceneId) throw new Error('未选择场景');
+-  const scene = useLibrary.getState().scenes.find((c) => c.id === sceneId);
+-  if (!scene) throw new Error('场景不存在（可能被删除）');
+-
+-  const promptParts = [scene.prompt || scene.description, node.settings.prompt].filter(Boolean);
+-  const finalPrompt = promptParts.join('\n').trim();
+-  if (!finalPrompt) throw new Error('场景 prompt/description 与节点 prompt 都为空');
+-
+-  const vars: Vars = {
+-    modelName: model.name,
+-    prompt: finalPrompt,
+-    n: 1,
+-    size: node.settings.resolution ?? '1024x1024',
+-    ratio: node.settings.ratio ?? '16:9',
+-    quality: 'standard',
+-    enableSequential: false,
+-  };
+-  const result = await generateImage({
+-    model,
+-    baseUrl,
+-    apiKey,
+-    vars,
+-    ctx: { hasReferenceImages: false, hasMask: false, useJimengLocalFile: false },
+-  });
+-  const content = imageResultToUrl(result.data[0] ?? {});
+-  if (!content) throw new Error('生成结果无 url / b64_json');
+-  const storedContent = await persistImageUrl(content, 'scene-image');
+-  patch(node.id, { content: storedContent });
+-  await useLibrary.getState().patchScene(sceneId, { imageUrl: storedContent });
+-  return {
+-    kind: 'image',
+-    model: model.id,
+-    prompt: finalPrompt,
+-    contentUrl: storedContent,
+-    contentUrls: [storedContent],
+-    sizeDesc: `${node.settings.ratio ?? '16:9'} · ${node.settings.resolution ?? '1024'} · ${scene.name}`,
+-  };
+-}
+-
+-async function runGenerateCharacterVideo(
+-  node: GenerateCharacterVideoNode,
+-  nodes: AppNode[],
+-  edges: AppEdge[],
+-  patch: PatchFn,
+-  historyEntryId?: string,
+-): Promise<RunResult> {
+-  const model = getModelDef(node.settings.model);
+-  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
+-
+-  const { apiKey, baseUrl } = loadRuntime(model);
+-  const charId = node.settings.characterId;
+-  if (!charId) throw new Error('未选择角色');
+-  const character = useLibrary.getState().characters.find((c) => c.id === charId);
+-  if (!character) throw new Error('角色不存在');
+-
+-  const promptParts = [character.prompt || character.description, node.settings.videoPrompt].filter(
+-    Boolean,
+-  );
+-  const prompt = promptParts.join('\n').trim();
+-  if (!prompt) throw new Error('prompt 为空');
+-
+-  const upstream = resolveUpstream(node.id, nodes, edges);
+-  const audioUrls =
+-    upstream.audioUrls.length > 0
+-      ? await prepareAudioUrls(upstream.audioUrls, { baseUrl, apiKey })
+-      : [];
+-
+-  const vars: Vars = {
+-    modelName: model.name,
+-    prompt,
+-    duration: resolveVideoDuration(model.id, node.settings.duration),
+-    size: resolveVideoSizeForModel(model.id, node.settings.ratio, node.settings.resolution),
+-    ratio: resolveVideoRatio(node.settings.ratio),
+-    resolution: resolveVideoResolutionForModel(model.id, node.settings.resolution),
+-  };
+-  vars.metadata = happyHorseMetadataForModel(
+-    model.id,
+-    node.settings.ratio,
+-    node.settings.resolution,
+-  );
+-  vars.metadata = mergeVideoMetadata(vars.metadata, audioReferenceMetadata(audioUrls));
+-  let seedanceImageUrls: string[] = [];
+-  if (character.imageUrl) {
+-    const imageUrls = await prepareReferenceImageUrls([character.imageUrl]);
+-    seedanceImageUrls = imageUrls;
+-    vars.primaryImageUrl = imageUrls[0];
+-    vars.imageUrls = imageUrls;
+-  }
+-  if (isSeedanceVideoModel(model.id)) {
+-    const seedanceVars = buildSeedanceVideoVars({
+-      modelName: model.name,
+-      prompt,
+-      duration: vars.duration as string,
+-      ratio: vars.ratio as string,
+-      resolution: vars.resolution as string,
+-      imageUrls: seedanceImageUrls,
+-      audioUrls,
+-      mode: 'omni-reference',
+-    });
+-    const url = await runVideoViaBackgroundTask({
+-      model,
+-      baseUrl,
+-      apiKey,
+-      vars: seedanceVars,
+-      ctx: {
+-        hasReferenceImages: seedanceImageUrls.length > 0 || audioUrls.length > 0,
+-        hasMask: false,
+-        useJimengLocalFile: false,
+-      },
+-      nodeId: node.id,
+-      historyEntryId,
+-      modelId: model.id,
+-    });
+-    if (!url) throw new Error('鐢熸垚缁撴灉鏃?url');
+-    patch(node.id, { content: url });
+-    return {
+-      kind: 'video',
+-      model: model.id,
+-      prompt,
+-      contentUrl: url,
+-      sizeDesc: `${seedanceVars.duration}s 路 ${seedanceVars.ratio} 路 ${character.name}`,
+-    };
+-  }
+-  const url = await runVideoViaBackgroundTask({
+-    model,
+-    baseUrl,
+-    apiKey,
+-    vars,
+-    ctx: {
+-      hasReferenceImages: !!character.imageUrl || audioUrls.length > 0,
+-      hasMask: false,
+-      useJimengLocalFile: false,
+-    },
+-    nodeId: node.id,
+-    historyEntryId,
+-    modelId: model.id,
+-  });
+-  if (!url) throw new Error('生成结果无 url');
+-  patch(node.id, { content: url });
+-  return {
+-    kind: 'video',
+-    model: model.id,
+-    prompt,
+-    contentUrl: url,
+-    sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${character.name}`,
+-  };
+-}
+-
+-async function runGenerateSceneVideo(
+-  node: GenerateSceneVideoNode,
+-  nodes: AppNode[],
+-  edges: AppEdge[],
+-  patch: PatchFn,
+-  historyEntryId?: string,
+-): Promise<RunResult> {
+-  const model = getModelDef(node.settings.model);
+-  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
+-
+-  const { apiKey, baseUrl } = loadRuntime(model);
+-  const sceneId = node.settings.sceneId;
+-  if (!sceneId) throw new Error('未选择场景');
+-  const scene = useLibrary.getState().scenes.find((c) => c.id === sceneId);
+-  if (!scene) throw new Error('场景不存在');
+-
+-  const promptParts = [scene.prompt || scene.description, node.settings.videoPrompt].filter(
+-    Boolean,
+-  );
+-  const prompt = promptParts.join('\n').trim();
+-  if (!prompt) throw new Error('prompt 为空');
+-
+-  const upstream = resolveUpstream(node.id, nodes, edges);
+-  const audioUrls =
+-    upstream.audioUrls.length > 0
+-      ? await prepareAudioUrls(upstream.audioUrls, { baseUrl, apiKey })
+-      : [];
+-
+-  const vars: Vars = {
+-    modelName: model.name,
+-    prompt,
+-    duration: resolveVideoDuration(model.id, node.settings.duration),
+-    size: resolveVideoSizeForModel(model.id, node.settings.ratio, node.settings.resolution),
+-    ratio: resolveVideoRatio(node.settings.ratio),
+-    resolution: resolveVideoResolutionForModel(model.id, node.settings.resolution),
+-  };
+-  vars.metadata = happyHorseMetadataForModel(
+-    model.id,
+-    node.settings.ratio,
+-    node.settings.resolution,
+-  );
+-  vars.metadata = mergeVideoMetadata(vars.metadata, audioReferenceMetadata(audioUrls));
+-  let seedanceImageUrls: string[] = [];
+-  if (scene.imageUrl) {
+-    const imageUrls = await prepareReferenceImageUrls([scene.imageUrl]);
+-    seedanceImageUrls = imageUrls;
+-    vars.primaryImageUrl = imageUrls[0];
+-    vars.imageUrls = imageUrls;
+-  }
+-  if (isSeedanceVideoModel(model.id)) {
+-    const seedanceVars = buildSeedanceVideoVars({
+-      modelName: model.name,
+-      prompt,
+-      duration: vars.duration as string,
+-      ratio: vars.ratio as string,
+-      resolution: vars.resolution as string,
+-      imageUrls: seedanceImageUrls,
+-      audioUrls,
+-      mode: 'omni-reference',
+-    });
+-    const url = await runVideoViaBackgroundTask({
+-      model,
+-      baseUrl,
+-      apiKey,
+-      vars: seedanceVars,
+-      ctx: {
+-        hasReferenceImages: seedanceImageUrls.length > 0 || audioUrls.length > 0,
+-        hasMask: false,
+-        useJimengLocalFile: false,
+-      },
+-      nodeId: node.id,
+-      historyEntryId,
+-      modelId: model.id,
+-    });
+-    if (!url) throw new Error('鐢熸垚缁撴灉鏃?url');
+-    patch(node.id, { content: url });
+-    return {
+-      kind: 'video',
+-      model: model.id,
+-      prompt,
+-      contentUrl: url,
+-      sizeDesc: `${seedanceVars.duration}s 路 ${seedanceVars.ratio} 路 ${scene.name}`,
+-    };
+-  }
+-  const url = await runVideoViaBackgroundTask({
+-    model,
+-    baseUrl,
+-    apiKey,
+-    vars,
+-    ctx: {
+-      hasReferenceImages: !!scene.imageUrl || audioUrls.length > 0,
+-      hasMask: false,
+-      useJimengLocalFile: false,
+-    },
+-    nodeId: node.id,
+-    historyEntryId,
+-    modelId: model.id,
+-  });
+-  if (!url) throw new Error('生成结果无 url');
+-  patch(node.id, { content: url });
+-  return {
+-    kind: 'video',
+-    model: model.id,
+-    prompt,
+-    contentUrl: url,
+-    sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${scene.name}`,
+-  };
+-}
+-
+-async function runExtractCharactersScenes(
+-  node: ExtractCharactersScenesNode,
+-  nodes: AppNode[],
+-  edges: AppEdge[],
+-): Promise<void> {
+-  const model = getModelDef(node.settings.model);
+-  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
+-
+-  const { apiKey, baseUrl } = loadRuntime(model);
+-
+-  const upstream = resolveUpstream(node.id, nodes, edges);
+-  const source = (upstream.prompt || node.settings.sourceText || '').trim();
+-  if (!source) throw new Error('源文本为空（连一个 text-node 或粘贴文本）');
+-
+-  const result = await chatComplete({
+-    model,
+-    baseUrl,
+-    apiKey,
+-    messages: [
+-      {
+-        role: 'system',
+-        content:
+-          '你是文本分析助手。请从用户提供的小说 / 文本中抽取出现的全部角色和场景。' +
+-          '严格输出 JSON（不要任何额外解释，不要 markdown 代码块包裹）：' +
+-          '{"characters":[{"name":"...","description":"..."}],"scenes":[{"name":"...","description":"..."}]}',
+-      },
+-      { role: 'user', content: source },
+-    ],
+-  });
+-  const text = result.choices[0]?.message?.content ?? '';
+-  // 尝试从可能含 markdown 围栏的响应里捞 JSON
+-  const jsonMatch = text.match(/\{[\s\S]*\}/);
+-  if (!jsonMatch) throw new Error('chat 返回未包含 JSON');
+-  let parsed: { characters?: unknown; scenes?: unknown };
+-  try {
+-    parsed = JSON.parse(jsonMatch[0]);
+-  } catch {
+-    throw new Error('chat 返回的 JSON 解析失败');
+-  }
+-  const characters = sanitize(parsed.characters);
+-  const scenes = sanitize(parsed.scenes);
+-  useCanvas.getState().patchSettings<'extract-characters-scenes'>(node.id, { characters, scenes });
+-}
+-
+-function sanitize(raw: unknown): Array<{ name: string; description: string }> {
+-  if (!Array.isArray(raw)) return [];
+-  return raw
+-    .map((x) => {
+-      if (!x || typeof x !== 'object') return null;
+-      const o = x as Record<string, unknown>;
+-      const name = typeof o.name === 'string' ? o.name : '';
+-      const description = typeof o.description === 'string' ? o.description : '';
+-      if (!name) return null;
+-      return { name, description };
+-    })
+-    .filter((x): x is { name: string; description: string } => x !== null);
+-}
+-
+-async function runCharacterCard(node: CharacterCardNode): Promise<RunResult> {
+-  const { apiKey, baseUrl } = loadRuntime();
+-  const modelId = normalizeImageModelId(node.settings.model);
+-  const model = getModelDef(modelId);
+-  if (!model) throw new Error(`未知模型: ${modelId}`);
+-
+-  const { inputMode, textDescription, referenceImage, viewType, expressions, imageSize } =
+-    node.settings;
+-
+-  // 验证输入
+-  if (inputMode === 'text' && !textDescription) {
+-    throw new Error('请输入角色描述');
+-  }
+-  if (inputMode === 'image' && !referenceImage) {
+-    throw new Error('请上传参考图片');
+-  }
+-
+-  // 确保图片尺寸满足最小要求（768x768 = 589,824 像素）
+-  const safeImageSize = Math.max(768, imageSize);
+-
+-  // 更新进度
+-  useCanvas.getState().patchSettings<'character-card'>(node.id, {
+-    isGenerating: true,
+-    progress: 0,
+-    error: null,
+-  });
+-
+-  try {
+-    // Step 1: 生成多视图
+-    useCanvas.getState().patchSettings<'character-card'>(node.id, { progress: 10 });
+-    const multiViewPrompt = buildMultiViewPrompt(textDescription || '', viewType, inputMode);
+-    const multiViewVars: Vars = {
+-      modelName: model.name,
+-      prompt: multiViewPrompt,
+-      n: 1,
+-      size: `${safeImageSize * (viewType === 'three' ? 3 : 4)}x${safeImageSize}`,
+-      ratio: viewType === 'three' ? '3:1' : '4:1',
+-      quality: 'standard',
+-      enableSequential: false,
+-    };
+-
+-    // 如果是图片模式，添加参考图
+-    if (inputMode === 'image' && referenceImage) {
+-      const imageUrls = await prepareReferenceImageUrls([referenceImage]);
+-      multiViewVars.imageUrls = imageUrls;
+-    }
+-
+-    const multiViewResult = await generateImage({
+-      model,
+-      baseUrl,
+-      apiKey,
+-      vars: multiViewVars,
+-      ctx: {
+-        hasReferenceImages: inputMode === 'image',
+-        hasMask: false,
+-        useJimengLocalFile: false,
+-      },
+-    });
+-
+-    const multiViewUrl = imageResultToUrl(multiViewResult.data[0] ?? {});
+-    if (!multiViewUrl) throw new Error('多视图生成失败');
+-    const storedMultiView = await persistImageUrl(multiViewUrl, 'character-multiview');
+-
+-    useCanvas.getState().patchSettings<'character-card'>(node.id, {
+-      multiViewImage: storedMultiView,
+-      progress: 30,
+-    });
+-
+-    // Step 2: 生成表情图（使用多视图作为参考）
+-    const expressionImages: Partial<Record<ExpressionType, string>> = {};
+-    const totalExpressions = expressions.length;
+-
+-    for (let i = 0; i < totalExpressions; i++) {
+-      const expr = expressions[i];
+-      const progress = 30 + Math.floor((i / totalExpressions) * 50);
+-      useCanvas.getState().patchSettings<'character-card'>(node.id, { progress });
+-
+-      const exprPrompt = buildExpressionPrompt(
+-        textDescription || '',
+-        expr,
+-        inputMode,
+-      );
+-      const exprVars: Vars = {
+-        modelName: model.name,
+-        prompt: exprPrompt,
+-        n: 1,
+-        size: `${safeImageSize}x${safeImageSize}`,
+-        ratio: '1:1',
+-        quality: 'standard',
+-        enableSequential: false,
+-      };
+-
+-      // 使用多视图作为参考图，保持角色一致性
+-      const refImages = inputMode === 'image' && referenceImage
+-        ? [referenceImage, storedMultiView]
+-        : [storedMultiView];
+-      const imageUrls = await prepareReferenceImageUrls(refImages);
+-      exprVars.imageUrls = imageUrls;
+-
+-      const exprResult = await generateImage({
+-        model,
+-        baseUrl,
+-        apiKey,
+-        vars: exprVars,
+-        ctx: {
+-          hasReferenceImages: true,
+-          hasMask: false,
+-          useJimengLocalFile: false,
+-        },
+-      });
+-
+-      const exprUrl = imageResultToUrl(exprResult.data[0] ?? {});
+-      if (!exprUrl) throw new Error(`表情 ${expr} 生成失败`);
+-      const storedExpr = await persistImageUrl(exprUrl, `character-expr-${expr}`);
+-      expressionImages[expr] = storedExpr;
+-    }
+-
+-    useCanvas.getState().patchSettings<'character-card'>(node.id, {
+-      expressionImages: expressionImages as Record<ExpressionType, string>,
+-      progress: 80,
+-    });
+-
+-    // Step 3: 合成最终角色卡
+-    console.log('开始合成角色卡', {
+-      multiViewImage: storedMultiView,
+-      expressionImages,
+-      layout: node.settings,
+-    });
+-
+-    const finalCard = await composeCharacterCard({
+-      multiViewImage: storedMultiView,
+-      expressionImages: expressionImages as Record<ExpressionType, string>,
+-      layout: node.settings,
+-    });
+-
+-    console.log('合成完成，开始持久化');
+-
+-    const storedFinalCard = await persistImageUrl(finalCard, 'character-card');
+-
+-    useCanvas.getState().patchSettings<'character-card'>(node.id, {
+-      finalCardImage: storedFinalCard,
+-      progress: 100,
+-      isGenerating: false,
+-    });
+-
+-    useCanvas.getState().patchNode(node.id, { content: storedFinalCard });
+-
+-    return {
+-      kind: 'image',
+-      model: model.id,
+-      prompt: textDescription || '角色卡',
+-      contentUrl: storedFinalCard,
+-      sizeDesc: `${viewType === 'three' ? '三视图' : '四视图'} + ${expressions.length}表情`,
+-    };
+-  } catch (err) {
+-    useCanvas.getState().patchSettings<'character-card'>(node.id, {
+-      isGenerating: false,
+-      error: err instanceof Error ? err.message : String(err),
+-    });
+-    throw err;
+-  }
+-}
+-
+-function buildMultiViewPrompt(
+-  description: string,
+-  viewType: 'three' | 'four',
+-  inputMode?: 'text' | 'image',
+-): string {
+-  const viewCount = viewType === 'three' ? 'three views' : 'four views';
+-  const views =
+-    viewType === 'three'
+-      ? '(front view, side view, back view)'
+-      : '(front view, 3/4 view, side view, back view)';
+-
+-  if (inputMode === 'image') {
+-    return `Character turnaround sheet, ${viewCount} ${views}, same character in different angles, white background, character design, concept art, consistent style, professional character sheet`;
+-  }
+-
+-  return `Character turnaround sheet, ${viewCount} ${views}, ${description}, white background, character design, concept art, same character in different angles, consistent style, professional character sheet`;
+-}
+-
+-function buildExpressionPrompt(
+-  description: string,
+-  expression: ExpressionType,
+-  inputMode?: 'text' | 'image',
+-): string {
+-  const expressionMap: Record<ExpressionType, string> = {
+-    happy: 'happy, smiling',
+-    sad: 'sad, crying',
+-    angry: 'angry, furious',
+-    surprised: 'surprised, shocked',
+-    neutral: 'neutral, calm',
+-    excited: 'excited, enthusiastic',
+-    worried: 'worried, anxious',
+-    shy: 'shy, blushing',
+-  };
+-
+-  const exprDesc = expressionMap[expression];
+-
+-  if (inputMode === 'image') {
+-    return `Character portrait, ${exprDesc} expression, close-up face, white background, character design, consistent with reference, emotional expression, same character`;
+-  }
+-
+-  return `Character portrait, ${exprDesc} expression, ${description}, close-up face, white background, character design, emotional expression`;
+-}
+-
+-export function useGenerationTrigger() {
+-  const enqueue = useTasks((s) => s.enqueue);
+-  const patchNode = useCanvas((s) => s.patchNode);
+-
+-  return useCallback(
+-    (nodeId: NodeId): TriggerResult => {
+-      const initialState = useCanvas.getState();
+-      const initialNode = initialState.nodes.find((n) => n.id === nodeId);
+-      if (initialNode && !isNodeFeatureEnabled(initialNode.kind)) {
+-        window.alert(FEATURE_DISABLED_MESSAGE);
+-        return { taskId: `disabled-${nodeId}` };
+-      }
+-      const historyEntry = initialNode
+-        ? createPendingHistory(initialNode, initialState.nodes, initialState.edges)
+-        : null;
+-
+-      const taskId = enqueue(nodeId, async () => {
+-        const state = useCanvas.getState();
+-        const node = state.nodes.find((n) => n.id === nodeId);
+-        if (!node) throw new Error('节点不存在');
+-        const startedAt = Date.now();
+-        let result: RunResult | null = null;
+-        try {
+-          if (node.kind === 'gen-image') {
+-            result = await runImageGen(node, state.nodes, state.edges);
+-          } else if (node.kind === 'gen-video') {
+-            result = await runVideoGen(
+-              node,
+-              state.nodes,
+-              state.edges,
+-              patchNode,
+-              historyEntry?.id,
+-            );
+-          } else if (node.kind === 'video-analyze') {
+-            await runVideoAnalyze(node, state.nodes, state.edges);
+-          } else if (node.kind === 'generate-character-image') {
+-            result = await runGenerateCharacterImage(node, patchNode);
+-          } else if (node.kind === 'generate-scene-image') {
+-            result = await runGenerateSceneImage(node, patchNode);
+-          } else if (node.kind === 'generate-character-video') {
+-            result = await runGenerateCharacterVideo(
+-              node,
+-              state.nodes,
+-              state.edges,
+-              patchNode,
+-              historyEntry?.id,
+-            );
+-          } else if (node.kind === 'generate-scene-video') {
+-            result = await runGenerateSceneVideo(
+-              node,
+-              state.nodes,
+-              state.edges,
+-              patchNode,
+-              historyEntry?.id,
+-            );
+-          } else if (node.kind === 'extract-characters-scenes') {
+-            await runExtractCharactersScenes(node, state.nodes, state.edges);
+-          } else if (node.kind === 'character-card') {
+-            result = await runCharacterCard(node);
+-          } else {
+-            throw new Error(`不支持的触发类型: ${node.kind}`);
+-          }
+-        } catch (err) {
+-          const error = err instanceof Error ? err.message : String(err);
+-          if (historyEntry) {
+-            void useHistory.getState().update(historyEntry.id, {
+-              status: 'failed',
+-              durationMs: Date.now() - startedAt,
+-              error,
+-            });
+-          } else if (result === null && isPersistableKind(node.kind)) {
+-            void useHistory.getState().push({
+-              nodeId,
+-              nodeKind: node.kind,
+-              kind: 'image',
+-              model: 'unknown',
+-              status: 'failed',
+-              durationMs: Date.now() - startedAt,
+-              error,
+-            });
+-          }
+-          throw err;
+-        }
+-        if (result) {
+-          if (node.kind === 'gen-video' && result.kind === 'video' && result.contentUrl) {
+-            patchNode(node.id, { content: result.contentUrl });
+-          }
+-          if (shouldCreateImageCompareNode(node.kind, result)) {
+-            createImageCompareResultNode(node, result);
+-          }
+-          if (shouldCreateVideoPreviewNode(node.kind, result)) {
+-            createVideoPreviewResultNode(node, result);
+-          }
+-          const completed = {
+-            kind: result.kind,
+-            model: result.model,
+-            prompt: result.prompt,
+-            content: result.contentUrl,
+-            contents: result.contentUrls,
+-            sizeDesc: result.sizeDesc,
+-            refsCount: result.refsCount,
+-            status: 'completed' as const,
+-            durationMs: Date.now() - startedAt,
+-          };
+-          if (historyEntry) {
+-            void useHistory.getState().update(historyEntry.id, completed);
+-          } else {
+-            void useHistory.getState().push({
+-              nodeId,
+-              nodeKind: node.kind,
+-              ...completed,
+-            });
+-          }
+-        }
+-      });
+-      return { taskId };
+-    },
+-    [enqueue, patchNode],
+-  );
+-}
+-
+-function shouldCreateImageCompareNode(kind: NodeKind, result: RunResult): boolean {
+-  return (
+-    isNodeFeatureEnabled('image-compare') &&
+-    result.kind === 'image' &&
+-    IMAGE_RESULT_NODE_KINDS.has(kind) &&
+-    !!result.contentUrl
+-  );
+-}
+-
+-function shouldCreateVideoPreviewNode(kind: NodeKind, result: RunResult): boolean {
+-  return (
+-    isNodeFeatureEnabled('preview') &&
+-    kind === 'gen-video' &&
+-    result.kind === 'video' &&
+-    !!result.contentUrl
+-  );
+-}
+-
+-function createImageCompareResultNode(source: AppNode, result: RunResult): void {
+-  const images = (result.contentUrls?.length ? result.contentUrls : [result.contentUrl]).filter(
+-    (url): url is string => !!url,
+-  );
+-  if (images.length === 0) return;
+-  const state = useCanvas.getState();
+-  const compareNode = createImageCompareNode(images, { x: 0, y: 0 });
+-  const pos = getResultNodePosition(
+-    source,
+-    state.nodes,
+-    state.edges,
+-    'image-compare',
+-    compareNode.width,
+-    compareNode.height,
+-  );
+-  compareNode.x = pos.x;
+-  compareNode.y = pos.y;
+-  state.addNode(compareNode);
+-  state.addEdge({ id: edgeId(), from: source.id, to: compareNode.id });
+-  state.setSelection([source.id, compareNode.id]);
+-}
+-
+-function createVideoPreviewResultNode(source: AppNode, result: RunResult): void {
+-  if (!result.contentUrl) return;
+-  const state = useCanvas.getState();
+-  const hasPreview = state.edges.some((edge) => {
+-    if (edge.from !== source.id) return false;
+-    const target = state.nodes.find((node) => node.id === edge.to);
+-    return (
+-      target?.kind === 'preview' &&
+-      target.settings.previewType === 'video' &&
+-      target.settings.content === result.contentUrl
+-    );
+-  });
+-  if (hasPreview) return;
+-
+-  const previewNode = createVideoPreviewNode(result.contentUrl, { x: 0, y: 0 });
+-  const pos = getResultNodePosition(
+-    source,
+-    state.nodes,
+-    state.edges,
+-    'preview',
+-    previewNode.width,
+-    previewNode.height,
+-  );
+-  previewNode.x = pos.x;
+-  previewNode.y = pos.y;
+-  state.addNode(previewNode);
+-  state.addEdge({ id: edgeId(), from: source.id, to: previewNode.id });
+-  state.setSelection([source.id, previewNode.id]);
+-}
+-
+-function isPersistableKind(kind: string): boolean {
+-  return (
+-    kind === 'gen-image' ||
+-    kind === 'gen-video' ||
+-    kind === 'generate-character-image' ||
+-    kind === 'generate-scene-image' ||
+-    kind === 'generate-character-video' ||
+-    kind === 'generate-scene-video'
+-  );
+-}
++import { useCallback } from 'react';
++import { chatComplete, type ChatContent } from '@/api/chat';
++import { generateImage } from '@/api/images';
 +import { runLocalVideo } from '@/api/local-bridge';
- import {
-   fetchImageMaterialBlob,
-   importImageUrlMaterial,
-@@ -428,6 +429,12 @@ const IMAGE_RESULT_NODE_KINDS = new Set<NodeKind>([
- type HistoryDraft = Omit<HistoryEntry, 'id' | 'timestamp'>;
- 
- function loadRuntime(model?: ModelDef): { apiKey: string; baseUrl: string } {
++import {
++  fetchImageMaterialBlob,
++  importImageUrlMaterial,
++  uploadImageMaterial,
++  uploadMaterial,
++} from '@/api/media';
++import { mjImagine, splitMjGrid } from '@/api/midjourney';
++import { getModelDef } from '@/api/models';
++import { routeRequest } from '@/api/model-routing';
++import { buildSeedanceVideoVars, isSeedanceVideoModel } from '@/api/seedance';
++import type { Vars } from '@/api/template';
++import { FIXED_BASE_URL, normalizeImageModelId } from '@/api/upstream';
++import {
++  buildVideoRequest,
++  type GenerateVideoOpts,
++} from '@/api/videos';
++import {
++  getVideoTaskClientId,
++  submitBackgroundVideoTask,
++  waitForBackgroundVideoTask,
++} from '@/api/video-tasks';
++import {
++  FEATURE_DISABLED_MESSAGE,
++  isNodeFeatureEnabled,
++} from '@/config/features';
++import { useCanvas } from '@/store/canvas';
++import { useHistory, type HistoryEntry, type HistoryKind } from '@/store/history';
++import { useLibrary } from '@/store/library';
++import { getPref } from '@/store/prefs';
++import { useTasks } from '@/store/tasks';
++import type { AppEdge } from '@/types/edge';
++import type {
++  AppNode,
++  CharacterCardNode,
++  ExtractCharactersScenesNode,
++  ExpressionType,
++  GenerateCharacterImageNode,
++  GenerateCharacterVideoNode,
++  GenerateSceneImageNode,
++  GenerateSceneVideoNode,
++  GenImageNode,
++  GenVideoNode,
++  NodeId,
++  NodeKind,
++  VideoAnalyzeNode,
++} from '@/types/node';
++import type { ModelDef } from '@/types/model';
++import { splitImageBatch } from '@/utils/batch';
++import { blobToDataURL, urlToBlob } from '@/utils/image';
++import { edgeId } from '@/utils/id';
++import { createImageCompareNode, createVideoPreviewNode } from '@/canvas/factory';
++import { getResultNodePosition } from '@/canvas/resultLayout';
++import { composeCharacterCard } from '@/utils/characterCard';
++import { resolveUpstream } from './useUpstream';
++import { resolveProviderConfig } from '@/utils/providerConfig';
++
++export interface TriggerResult {
++  taskId: string;
++}
++
++type PatchFn = (id: NodeId, p: { content: string }) => void;
++
++function imageResultToUrl(item: { url?: string; b64_json?: string }): string | undefined {
++  if (item.url) return item.url;
++  if (item.b64_json) return `data:image/png;base64,${item.b64_json}`;
++  return undefined;
++}
++
++async function persistImageUrl(url: string, name: string): Promise<string> {
++  if (isLocalImageUrl(url)) {
++    const blob = await loadImageBlob(url);
++    return uploadImageMaterial(blob, ensureImageFilename(name, blob.type));
++  }
++  if (isHttpUrl(url)) {
++    // 对于 HTTP URL，直接让后端导入
++    // 避免浏览器 CORS 问题
++    return importImageUrlMaterial(url, ensureImageFilename(name));
++  }
++  throw new Error(`不支持的图片地址: ${url.slice(0, 48)}`);
++}
++
++async function persistImageUrls(urls: string[], prefix: string): Promise<string[]> {
++  return Promise.all(urls.map((url, index) => persistImageUrl(url, `${prefix}-${index + 1}`)));
++}
++
++interface MediaRuntime {
++  baseUrl?: string;
++  apiKey?: string;
++}
++
++async function persistMediaUrl(
++  url: string,
++  name: string,
++  runtime: MediaRuntime = {},
++): Promise<string> {
++  if (isLocalImageUrl(url)) {
++    const blob = await loadImageBlob(url);
++    return uploadMaterial(blob, ensureMediaFilename(name, blob.type), runtime);
++  }
++  if (isHttpUrl(url)) return url;
++  throw new Error(`不支持的素材地址: ${url.slice(0, 48)}`);
++}
++
++async function prepareAudioUrls(
++  urls: string[],
++  runtime: MediaRuntime = {},
++): Promise<string[]> {
++  return Promise.all(
++    urls.filter(Boolean).map((url, index) => persistMediaUrl(url, `audio-${index + 1}`, runtime)),
++  );
++}
++
++async function loadImageBlob(url: string): Promise<Blob> {
++  if (isHttpUrl(url)) return fetchImageMaterialBlob(url);
++  return urlToBlob(url);
++}
++
++async function prepareReferenceInputs(
++  urls: string[],
++  options: { includeBlobs: boolean },
++): Promise<{ imageUrls: string[]; blobs?: Blob[] }> {
++  const imageUrls = await prepareReferenceImageUrls(urls);
++  if (!options.includeBlobs) return { imageUrls };
++  return {
++    imageUrls,
++    blobs: await Promise.all(imageUrls.map(loadImageBlob)),
++  };
++}
++
++function isLocalImageUrl(url: string): boolean {
++  return url.startsWith('data:') || url.startsWith('blob:');
++}
++
++function isHttpUrl(url: string): boolean {
++  return url.startsWith('http://') || url.startsWith('https://');
++}
++
++function ensureImageFilename(name: string, contentType = 'image/png'): string {
++  if (/\.[a-z0-9]{1,8}$/i.test(name)) return name;
++  return `${name}${extensionFromContentType(contentType)}`;
++}
++
++function ensureMediaFilename(name: string, contentType = 'application/octet-stream'): string {
++  if (/\.[a-z0-9]{1,8}$/i.test(name)) return name;
++  return `${name}${extensionFromContentType(contentType)}`;
++}
++
++function extensionFromContentType(contentType: string): string {
++  const type = contentType.toLowerCase().split(';')[0].trim();
++  if (type === 'image/jpeg') return '.jpg';
++  if (type === 'image/webp') return '.webp';
++  if (type === 'image/gif') return '.gif';
++  if (type === 'audio/mpeg') return '.mp3';
++  if (type === 'audio/wav' || type === 'audio/wave' || type === 'audio/x-wav') return '.wav';
++  if (type === 'audio/ogg') return '.ogg';
++  if (type === 'audio/aac') return '.aac';
++  if (type === 'audio/mp4' || type === 'audio/x-m4a') return '.m4a';
++  if (type === 'video/mp4') return '.mp4';
++  return '.png';
++}
++
++function resolveImageSize(settings: {
++  resolution?: string;
++  width?: number | '';
++  height?: number | '';
++}): string {
++  const width = clampImageDimension(settings.width);
++  const height = clampImageDimension(settings.height);
++  if (width && height) return `${width}x${height}`;
++  return settings.resolution ?? '1024x1024';
++}
++
++function resolveVideoSizeForModel(
++  modelId: string,
++  ratio?: string,
++  resolution?: string,
++): string | undefined {
++  if (isKlingVideoModel(modelId)) return ratioToKlingSize(ratio);
++  if (isSeedanceVideoModel(modelId)) return ratioToKlingSize(ratio);
++  if (isHappyHorseVideoModel(modelId)) return undefined;
++  return resolution || '720p';
++}
++
++function resolveVideoResolutionForModel(modelId: string, resolution?: string): string {
++  const value = normalizeVideoResolution(resolution);
++  return isHappyHorseVideoModel(modelId) ? normalizeHappyHorseResolution(value) : value;
++}
++
++function happyHorseMetadataForModel(
++  modelId: string,
++  ratio?: string,
++  resolution?: string,
++): Record<string, unknown> | undefined {
++  if (!isHappyHorseVideoModel(modelId)) return undefined;
++  const parameters: Record<string, unknown> = {
++    resolution: normalizeHappyHorseResolution(resolution),
++  };
++  if (isHappyHorseRatioModel(modelId)) {
++    parameters.ratio = resolveVideoRatio(ratio);
++  }
++  return { parameters };
++}
++
++function mergeVideoMetadata(
++  base: unknown,
++  patch: Record<string, unknown> | undefined,
++): Record<string, unknown> | undefined {
++  if (!patch)
++    return base && typeof base === 'object' && !Array.isArray(base)
++      ? { ...(base as Record<string, unknown>) }
++      : undefined;
++  if (!base || typeof base !== 'object' || Array.isArray(base)) return patch;
++  return { ...(base as Record<string, unknown>), ...patch };
++}
++
++function audioReferenceMetadata(audioUrls: string[]): Record<string, unknown> | undefined {
++  if (audioUrls.length === 0) return undefined;
++  return {
++    audio_urls: audioUrls,
++    reference_audio_urls: audioUrls,
++    audio_url: audioUrls[0],
++  };
++}
++
++function isHappyHorseVideoModel(modelId: string): boolean {
++  return modelId.toLowerCase().startsWith('happyhorse-1.0-');
++}
++
++function isHappyHorseTextToVideoModel(modelId: string): boolean {
++  return modelId.toLowerCase() === 'happyhorse-1.0-t2v';
++}
++
++function isHappyHorseImageToVideoModel(modelId: string): boolean {
++  return modelId.toLowerCase() === 'happyhorse-1.0-i2v';
++}
++
++function isHappyHorseReferenceToVideoModel(modelId: string): boolean {
++  return modelId.toLowerCase() === 'happyhorse-1.0-r2v';
++}
++
++function isHappyHorseRatioModel(modelId: string): boolean {
++  const name = modelId.toLowerCase();
++  return name === 'happyhorse-1.0-t2v' || name === 'happyhorse-1.0-r2v';
++}
++
++function validateHappyHorseVideoInputs(
++  modelId: string,
++  imageCount: number,
++  hasVideoRef: boolean,
++  videoMode: 'first-last-frame' | 'omni-reference',
++): void {
++  if (!isHappyHorseVideoModel(modelId)) return;
++  if (videoMode === 'first-last-frame') {
++    throw new Error('HappyHorse 不支持首尾帧模式，请切换为全能参考');
++  }
++  if (isHappyHorseTextToVideoModel(modelId)) {
++    if (imageCount > 0 || hasVideoRef) {
++      throw new Error('HappyHorse 文生视频不支持参考素材，请断开参考图/视频');
++    }
++    return;
++  }
++  if (isHappyHorseImageToVideoModel(modelId)) {
++    if (hasVideoRef) {
++      throw new Error('HappyHorse 图生视频仅支持 1 张首帧图片，不支持参考视频');
++    }
++    if (imageCount !== 1) {
++      throw new Error('HappyHorse 图生视频需要且仅支持 1 张首帧图片');
++    }
++    return;
++  }
++  if (isHappyHorseReferenceToVideoModel(modelId)) {
++    if (hasVideoRef) {
++      throw new Error('HappyHorse 多图参考仅支持参考图片，不支持参考视频');
++    }
++    if (imageCount < 1 || imageCount > 9) {
++      throw new Error('HappyHorse 多图参考需要 1-9 张参考图片');
++    }
++  }
++}
++
++function normalizeHappyHorseResolution(resolution?: string): string {
++  const value = String(resolution || '720p').trim().toUpperCase();
++  if (value === '1080' || value === '1080P') return '1080P';
++  return '720P';
++}
++
++function normalizeVideoResolution(resolution?: string): string {
++  const value = String(resolution || '720p').trim().toLowerCase();
++  return value === '1080p' || value === '1080' ? '1080p' : '720p';
++}
++
++function resolveVideoDuration(modelId: string, duration?: string | number): string {
++  const parsed = typeof duration === 'number' ? duration : parseInt(String(duration ?? '5s'), 10);
++  const value = Number.isFinite(parsed) ? parsed : 5;
++  const isHappyHorse = modelId.toLowerCase().startsWith('happyhorse-1.0-');
++  const min = isHappyHorse ? 3 : 4;
++  const max = isHappyHorse ? 15 : 10;
++  return `${Math.min(max, Math.max(min, value))}s`;
++}
++
++function resolveVideoRatio(ratio?: string): string {
++  const value = ratio || '16:9';
++  if (['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'].includes(value)) return value;
++  return '16:9';
++}
++
++function ratioToKlingSize(ratio = '16:9'): string {
++  switch (ratio) {
++    case '9:16':
++      return '720x1280';
++    case '1:1':
++      return '1024x1024';
++    case '4:3':
++      return '1024x768';
++    case '3:4':
++      return '768x1024';
++    case '21:9':
++      return '1280x720';
++    case '16:9':
++    default:
++      return '1280x720';
++  }
++}
++
++function isKlingVideoModel(modelId: string): boolean {
++  return modelId.toLowerCase().includes('kling');
++}
++
++function isWan27I2VModel(modelId: string): boolean {
++  const name = modelId.toLowerCase();
++  return name.startsWith('wan2.7') && name.includes('i2v');
++}
++
++function wan27MediaMetadata(
++  imageUrls: string[],
++  videoUrl: string | null,
++  mode: 'first-last-frame' | 'omni-reference',
++): Record<string, unknown> | undefined {
++  const media: Array<{ type: string; url: string }> = [];
++  if (mode === 'first-last-frame') {
++    if (imageUrls[0]) media.push({ type: 'first_frame', url: imageUrls[0] });
++    if (imageUrls[1]) media.push({ type: 'last_frame', url: imageUrls[1] });
++  } else {
++    if (imageUrls[0]) media.push({ type: 'first_frame', url: imageUrls[0] });
++    if (videoUrl) media.push({ type: 'first_clip', url: videoUrl });
++  }
++  if (media.length === 0) return undefined;
++  return { input: { media } };
++}
++
++function klingNativeInput(
++  prompt: string,
++  imageUrls: string[],
++  videoUrl: string | null,
++  mode: 'first-last-frame' | 'omni-reference',
++): Record<string, unknown> {
++  const input: Record<string, unknown> = { prompt };
++  const media: Array<Record<string, unknown>> = [];
++  if (mode === 'first-last-frame') {
++    if (imageUrls[0]) media.push({ type: 'first_frame', url: imageUrls[0] });
++    if (imageUrls[1]) media.push({ type: 'last_frame', url: imageUrls[1] });
++  } else {
++    for (const url of imageUrls) media.push({ type: 'refer', url });
++    if (videoUrl) media.push({ type: 'base', url: videoUrl, keep_original_sound: 'yes' });
++  }
++  if (media.length > 0) input.media = media;
++  return input;
++}
++
++function klingNativeParameters(
++  ratio?: string,
++  resolution?: string,
++  duration?: string | number,
++): Record<string, unknown> {
++  const params: Record<string, unknown> = {
++    aspect_ratio: ratioToKlingAspect(ratio),
++    duration: durationToNumber(duration),
++    quality: resolution === '1080p' ? 'pro' : 'std',
++  };
++  return params;
++}
++
++function ratioToKlingAspect(ratio = '16:9'): string {
++  if (ratio === '9:16' || ratio === '1:1') return ratio;
++  if (ratio === '3:4') return '9:16';
++  return '16:9';
++}
++
++function durationToNumber(duration: string | number | undefined): number {
++  if (typeof duration === 'number' && Number.isFinite(duration)) return duration;
++  const parsed = parseInt(String(duration ?? '5s'), 10);
++  return Number.isNaN(parsed) ? 5 : parsed;
++}
++
++function clampImageDimension(value: number | '' | undefined): number | null {
++  if (!Number.isFinite(value)) return null;
++  const rounded = Math.round(Number(value));
++  return Math.min(4096, Math.max(64, rounded));
++}
++
++function resolveImageQuality(value?: string): string {
++  if (value === 'high') return 'high';
++  if (value === 'medium') return 'medium';
++  if (value === 'low') return 'low';
++  return 'standard';
++}
++
++interface RunResult {
++  kind: HistoryKind;
++  model: string;
++  prompt?: string;
++  contentUrl?: string;
++  contentUrls?: string[];
++  sizeDesc?: string;
++  refsCount?: number;
++}
++
++const IMAGE_RESULT_NODE_KINDS = new Set<NodeKind>([
++  'gen-image',
++  'generate-character-image',
++  'generate-scene-image',
++  'character-card',
++]);
++
++type HistoryDraft = Omit<HistoryEntry, 'id' | 'timestamp'>;
++
++function loadRuntime(model?: ModelDef): { apiKey: string; baseUrl: string } {
 +  // 本地渠道由编排器同源提供，没有凭据可言；必须在缺少全局 Key 的回退分支
 +  // 抛错之前短路，否则“开箱即用”在没配过任何服务商的机器上会直接失败。
 +  if (model?.provider === 'local') {
 +    return { apiKey: '', baseUrl: '' };
 +  }
 +
-   // 如果提供了模型，尝试从模型的服务商配置中读取
-   if (model) {
-     const providerConfig = resolveProviderConfig(model);
-@@ -656,6 +663,32 @@ async function runVideoGen(
-   const finalPrompt = upstream.prompt || node.settings.videoPrompt;
-   if (!finalPrompt) throw new Error('video prompt 为空');
- 
++  // 如果提供了模型，尝试从模型的服务商配置中读取
++  if (model) {
++    const providerConfig = resolveProviderConfig(model);
++    if (providerConfig) {
++      return {
++        apiKey: providerConfig.apiKey,
++        baseUrl: providerConfig.baseUrl,
++      };
++    }
++  }
++
++  // 回退到全局配置（兼容旧版本）
++  const apiKey = String(getPref('global_key', ''));
++  const baseUrl = String(getPref('global_base_url', FIXED_BASE_URL));
++
++  if (!apiKey) {
++    throw new Error('API Key 未配置（请在设置中配置服务商或全局 API Key）');
++  }
++
++  return { apiKey, baseUrl };
++}
++
++function createPendingHistory(
++  node: AppNode,
++  nodes: AppNode[],
++  edges: AppEdge[],
++): HistoryEntry | null {
++  const draft = getPendingHistoryDraft(node, nodes, edges);
++  if (!draft) return null;
++  return useHistory.getState().create({ ...draft, status: 'pending' });
++}
++
++async function runVideoViaBackgroundTask(
++  opts: GenerateVideoOpts & {
++    nodeId: NodeId;
++    historyEntryId?: string;
++    modelId: string;
++  },
++): Promise<string> {
++  const request = buildVideoRequest(opts);
++  const submitted = await submitBackgroundVideoTask({
++    clientId: getVideoTaskClientId(),
++    nodeId: opts.nodeId,
++    historyEntryId: opts.historyEntryId,
++    model: opts.modelId,
++    baseUrl: opts.baseUrl,
++    apiKey: opts.apiKey ?? '',
++    request,
++  });
++  const completed = await waitForBackgroundVideoTask(submitted.id);
++  if (!completed.resultUrl) throw new Error('后台视频任务完成但缺少结果 URL');
++  return completed.resultUrl;
++}
++
++function getPendingHistoryDraft(
++  node: AppNode,
++  nodes: AppNode[],
++  edges: AppEdge[],
++): HistoryDraft | null {
++  if (node.kind === 'gen-image') {
++    const upstream = resolveUpstream(node.id, nodes, edges);
++    const modelId = normalizeImageModelId(node.settings.model);
++    return {
++      nodeId: node.id,
++      nodeKind: node.kind,
++      kind: 'image',
++      model: modelId,
++      prompt: upstream.prompt || node.settings.prompt,
++      sizeDesc: `${node.settings.ratio ?? '1:1'} · ${resolveImageSize(node.settings)} · ${node.settings.count ?? 1}张`,
++      refsCount: upstream.referenceImages.length,
++    };
++  }
++
++  if (node.kind === 'gen-video') {
++    const upstream = resolveUpstream(node.id, nodes, edges);
++    return {
++      nodeId: node.id,
++      nodeKind: node.kind,
++      kind: 'video',
++      model: node.settings.model,
++      prompt: upstream.prompt || node.settings.videoPrompt,
++      sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${node.settings.resolution ?? '720p'}`,
++      refsCount: upstream.referenceImages.length,
++    };
++  }
++
++  if (node.kind === 'generate-character-image' || node.kind === 'generate-scene-image') {
++    return {
++      nodeId: node.id,
++      nodeKind: node.kind,
++      kind: 'image',
++      model: normalizeImageModelId(node.settings.model),
++      prompt: node.settings.prompt,
++      sizeDesc: `${node.settings.ratio ?? '1:1'} · ${node.settings.resolution ?? '1024x1024'}`,
++    };
++  }
++
++  if (node.kind === 'generate-character-video' || node.kind === 'generate-scene-video') {
++    return {
++      nodeId: node.id,
++      nodeKind: node.kind,
++      kind: 'video',
++      model: node.settings.model,
++      prompt: node.settings.videoPrompt,
++      sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${node.settings.resolution ?? '720p'}`,
++    };
++  }
++
++  return null;
++}
++
++async function runImageGen(
++  node: GenImageNode,
++  nodes: AppNode[],
++  edges: AppEdge[],
++): Promise<RunResult> {
++  const modelId = normalizeImageModelId(node.settings.model);
++  const model = getModelDef(modelId);
++  if (!model) throw new Error(`未知模型: ${modelId}`);
++
++  const { apiKey, baseUrl } = loadRuntime(model);
++
++  const upstream = resolveUpstream(node.id, nodes, edges);
++  const refs = upstream.referenceImages;
++  const finalPrompt = upstream.prompt || node.settings.prompt;
++  if (!finalPrompt) {
++    throw new Error('prompt 为空（节点 prompt 与上游 text 节点均无内容）');
++  }
++
++  if (model.provider === 'midjourney') {
++    const task = await mjImagine({ baseUrl, apiKey, prompt: finalPrompt });
++    const original = task.imageUrl;
++    if (!original) throw new Error('MJ 返回无 imageUrl');
++    let images: string[];
++    try {
++      images = await splitMjGrid(original);
++    } catch {
++      images = [original];
++    }
++    const storedImages = await persistImageUrls(images, 'mj-image');
++    useCanvas.getState().patchNode(node.id, {
++      content: storedImages[0],
++      generatedImages: storedImages,
++      mjImages: storedImages,
++      mjOriginalUrl: original,
++      mjNeedsSplit: false,
++    });
++    return {
++      kind: 'image',
++      model: model.id,
++      prompt: finalPrompt,
++      contentUrl: storedImages[0],
++      contentUrls: storedImages,
++      sizeDesc: 'MJ · 4-split',
++      refsCount: refs.length,
++    };
++  }
++
++  const ctx = {
++    hasReferenceImages: refs.length > 0,
++    hasMask: !!upstream.mask,
++    useJimengLocalFile: Boolean(getPref('jimeng_use_local_file', false)),
++  };
++  const needsFileInput = routeRequest({ type: 'image' }, model, ctx).bodyKind === 'form';
++  const count = node.settings.count ?? 1;
++  const baseVars: Vars = {
++    modelName: model.name,
++    prompt: finalPrompt,
++    size: resolveImageSize(node.settings),
++    ratio: node.settings.ratio ?? '1:1',
++    quality: resolveImageQuality(node.settings.quality),
++    enableSequential: false,
++  };
++  if (refs.length > 0) {
++    const { imageUrls, blobs } = await prepareReferenceInputs(refs, {
++      includeBlobs: needsFileInput,
++    });
++    baseVars.imageUrls = imageUrls;
++    if (blobs) baseVars.image = blobs;
++  }
++  if (upstream.mask && needsFileInput) baseVars.mask = await loadImageBlob(upstream.mask);
++
++  const images: string[] = [];
++  for (const n of splitImageBatch(count)) {
++    const result = await generateImage({
++      model,
++      baseUrl,
++      apiKey,
++      vars: { ...baseVars, n },
++      ctx,
++    });
++    images.push(...result.data.map(imageResultToUrl).filter((url): url is string => !!url));
++  }
++  const content = images[0];
++  if (!content) throw new Error('生成结果无 url / b64_json');
++  const storedImages = await persistImageUrls(images, 'generated-image');
++  const storedContent = storedImages[0];
++  if (!storedContent) throw new Error('生成结果持久化失败');
++  useCanvas
++    .getState()
++    .patchNode(node.id, { content: storedContent, generatedImages: storedImages, mjImages: undefined });
++  return {
++    kind: 'image',
++    model: model.id,
++    prompt: finalPrompt,
++    contentUrl: storedContent,
++    contentUrls: storedImages,
++    sizeDesc: `${node.settings.ratio ?? '1:1'} · ${resolveImageSize(node.settings)} · ${storedImages.length}张`,
++    refsCount: refs.length,
++  };
++}
++
++async function runVideoGen(
++  node: GenVideoNode,
++  nodes: AppNode[],
++  edges: AppEdge[],
++  patch: PatchFn,
++  historyEntryId?: string,
++): Promise<RunResult> {
++  const model = getModelDef(node.settings.model);
++  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
++
++  const { apiKey, baseUrl } = loadRuntime(model);
++
++  const upstream = resolveUpstream(node.id, nodes, edges);
++  const finalPrompt = upstream.prompt || node.settings.videoPrompt;
++  if (!finalPrompt) throw new Error('video prompt 为空');
++
 +  // 本地 H3：在云端模型的分支逻辑之前分流，避免把第三套规则塞进下面的判断链。
 +  if (model.provider === 'local') {
 +    const url = await runLocalVideo({
@@ -1286,21 +4221,1056 @@ index 8a2b367..523981f 100644
 +      sizeDesc: `本地 H3 · ${node.settings.ratio ?? '16:9'}`,
 +      refsCount: upstream.referenceImages.length,
 +    };
-+  }warning: in the working copy of 'src/utils/bench.ts', LF will be replaced by CRLF the next time Git touches it
-
++  }
 +
-   const ctx = {
-     hasReferenceImages: upstream.referenceImages.length > 0 || upstream.audioUrls.length > 0,
-     hasMask: false,
++  const ctx = {
++    hasReferenceImages: upstream.referenceImages.length > 0 || upstream.audioUrls.length > 0,
++    hasMask: false,
++    useJimengLocalFile: false,
++  };
++  const videoMode = node.settings.videoMode ?? 'omni-reference';
++  if (isWan27I2VModel(model.id) && videoMode === 'omni-reference') {
++    throw new Error('wan2.7-i2v 不支持全能参考模式，请切换为首尾帧或选择可灵模型');
++  }
++  validateHappyHorseVideoInputs(
++    model.id,
++    upstream.referenceImages.length,
++    Boolean(upstream.videoUrl),
++    videoMode,
++  );
++  const vars: Vars = {
++    modelName: model.name,
++    prompt: finalPrompt,
++    duration: resolveVideoDuration(model.id, node.settings.duration),
++    size: resolveVideoSizeForModel(model.id, node.settings.ratio, node.settings.resolution),
++    ratio: resolveVideoRatio(node.settings.ratio),
++    resolution: resolveVideoResolutionForModel(model.id, node.settings.resolution),
++  };
++  vars.metadata = happyHorseMetadataForModel(
++    model.id,
++    node.settings.ratio,
++    node.settings.resolution,
++  );
++  const audioUrls =
++    upstream.audioUrls.length > 0
++      ? await prepareAudioUrls(upstream.audioUrls, { baseUrl, apiKey })
++      : [];
++  vars.metadata = mergeVideoMetadata(vars.metadata, audioReferenceMetadata(audioUrls));
++  vars.mode = videoMode === 'first-last-frame' ? 'first_last_frame' : 'multi_ref';
++  if (isSeedanceVideoModel(model.id)) {
++    const imageUrls =
++      upstream.referenceImages.length > 0
++        ? await prepareReferenceImageUrls(upstream.referenceImages)
++        : [];
++    const seedanceVars = buildSeedanceVideoVars({
++      modelName: model.name,
++      prompt: finalPrompt,
++      duration: resolveVideoDuration(model.id, node.settings.duration),
++      ratio: resolveVideoRatio(node.settings.ratio),
++      resolution: resolveVideoResolutionForModel(model.id, node.settings.resolution),
++      imageUrls,
++      videoUrl: upstream.videoUrl,
++      audioUrls,
++      mode: videoMode,
++    });
++    const url = await runVideoViaBackgroundTask({
++      model,
++      baseUrl,
++      apiKey,
++      vars: seedanceVars,
++      ctx,
++      nodeId: node.id,
++      historyEntryId,
++      modelId: model.id,
++    });
++    if (!url) throw new Error('鐢熸垚缁撴灉鏃?url');
++    patch(node.id, { content: url });
++    return {
++      kind: 'video',
++      model: model.id,
++      prompt: finalPrompt,
++      contentUrl: url,
++      sizeDesc: `${seedanceVars.duration}s 路 ${seedanceVars.ratio} 路 ${seedanceVars.resolution}`,
++      refsCount: upstream.referenceImages.length,
++    };
++  }
++  if (videoMode === 'first-last-frame') {
++    if (upstream.referenceImages.length < 2) {
++      throw new Error('首尾帧模式需要连接至少 2 张参考图');
++    }
++    const imageUrls = await prepareReferenceImageUrls(upstream.referenceImages.slice(0, 2));
++    if (isKlingVideoModel(model.id)) {
++      vars.input = klingNativeInput(finalPrompt, imageUrls, null, videoMode);
++      vars.parameters = klingNativeParameters(
++        node.settings.ratio,
++        vars.resolution as string,
++        vars.duration as string,
++      );
++    } else if (isWan27I2VModel(model.id)) {
++      vars.metadata = mergeVideoMetadata(vars.metadata, wan27MediaMetadata(imageUrls, null, videoMode));
++    } else {
++      vars.imageUrls = imageUrls;
++    }
++  } else {
++    let imageUrls: string[] = [];
++    if (upstream.referenceImages.length > 0) {
++      imageUrls = await prepareReferenceImageUrls(upstream.referenceImages);
++    }
++    if (isWan27I2VModel(model.id)) {
++      if (imageUrls.length > 1) {
++        throw new Error('wan2.7-i2v 全能参考不支持多张图片；请改用可灵全能参考，或只连接 1 张图片');
++      }
++      vars.metadata = mergeVideoMetadata(
++        vars.metadata,
++        wan27MediaMetadata(imageUrls, upstream.videoUrl, videoMode),
++      );
++    } else if (isKlingVideoModel(model.id)) {
++      vars.input = klingNativeInput(finalPrompt, imageUrls, upstream.videoUrl, videoMode);
++      vars.parameters = klingNativeParameters(
++        node.settings.ratio,
++        vars.resolution as string,
++        vars.duration as string,
++      );
++    } else {
++      if (imageUrls.length === 1) {
++        vars.primaryImageUrl = imageUrls[0];
++      } else if (imageUrls.length > 1) {
++        vars.imageUrls = imageUrls;
++      }
++      if (upstream.videoUrl) {
++        vars.metadata = mergeVideoMetadata(
++          vars.metadata,
++          model.id === 'happyhorse-1.0-video-edit'
++            ? { input: { media: [{ type: 'first_clip', url: upstream.videoUrl }] } }
++            : { video_urls: [upstream.videoUrl] },
++        );
++      }
++    }
++  }
++
++  const url = await runVideoViaBackgroundTask({
++    model,
++    baseUrl,
++    apiKey,
++    vars,
++    ctx,
++    nodeId: node.id,
++    historyEntryId,
++    modelId: model.id,
++  });
++  if (!url) throw new Error('生成结果无 url');
++  patch(node.id, { content: url });
++  return {
++    kind: 'video',
++    model: model.id,
++    prompt: finalPrompt,
++    contentUrl: url,
++    sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${node.settings.resolution ?? '720p'}`,
++    refsCount: upstream.referenceImages.length,
++  };
++}
++
++async function runVideoAnalyze(
++  node: VideoAnalyzeNode,
++  nodes: AppNode[],
++  edges: AppEdge[],
++): Promise<void> {
++  const model = getModelDef(node.settings.model);
++  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
++
++  const { apiKey, baseUrl } = loadRuntime(model);
++
++  const upstream = resolveUpstream(node.id, nodes, edges);
++  const frames = upstream.videoFrames;
++  if (frames.length === 0) {
++    throw new Error('上游 video-input 需要先截取关键帧');
++  }
++  const instruction =
++    node.settings.instruction?.trim() ||
++    '请按时间顺序描述以下视频关键帧组成的内容（人物 / 动作 / 场景变化）。';
++
++  const userContent: ChatContent = [
++    { type: 'text', text: instruction },
++    ...frames.slice(0, 16).map((f) => ({
++      type: 'image_url' as const,
++      image_url: { url: f.url },
++    })),
++  ];
++
++  const result = await chatComplete({
++    model,
++    baseUrl,
++    apiKey,
++    messages: [
++      { role: 'system', content: '你是视频分析助手。回答简洁、结构化。' },
++      { role: 'user', content: userContent },
++    ],
++  });
++  const text = result.choices[0]?.message?.content;
++  if (!text) throw new Error('chat 返回空内容');
++  useCanvas.getState().patchSettings<'video-analyze'>(node.id, { analysisResult: text });
++}
++
++async function prepareReferenceImageUrls(urls: string[]): Promise<string[]> {
++  return Promise.all(
++    urls.slice(0, 5).map(async (url, index) => {
++      if (isHttpUrl(url)) return url;
++      if (url.startsWith('data:')) return url;
++      if (url.startsWith('blob:')) return blobToDataURL(await loadImageBlob(url));
++      return persistImageUrl(url, `reference-${index + 1}`);
++    }),
++  );
++}
++
++async function runGenerateCharacterImage(
++  node: GenerateCharacterImageNode,
++  patch: PatchFn,
++): Promise<RunResult> {
++  const { apiKey, baseUrl } = loadRuntime();
++  const modelId = normalizeImageModelId(node.settings.model);
++  const model = getModelDef(modelId);
++  if (!model) throw new Error(`未知模型: ${modelId}`);
++  const charId = node.settings.characterId;
++  if (!charId) throw new Error('未选择角色');
++  const character = useLibrary.getState().characters.find((c) => c.id === charId);
++  if (!character) throw new Error('角色不存在（可能被删除）');
++
++  const promptParts = [character.prompt || character.description, node.settings.prompt].filter(
++    Boolean,
++  );
++  const finalPrompt = promptParts.join('\n').trim();
++  if (!finalPrompt) throw new Error('角色 prompt/description 与节点 prompt 都为空');
++
++  const vars: Vars = {
++    modelName: model.name,
++    prompt: finalPrompt,
++    n: 1,
++    size: node.settings.resolution ?? '1024x1024',
++    ratio: node.settings.ratio ?? '1:1',
++    quality: 'standard',
++    enableSequential: false,
++  };
++  const result = await generateImage({
++    model,
++    baseUrl,
++    apiKey,
++    vars,
++    ctx: { hasReferenceImages: false, hasMask: false, useJimengLocalFile: false },
++  });
++  const content = imageResultToUrl(result.data[0] ?? {});
++  if (!content) throw new Error('生成结果无 url / b64_json');
++  const storedContent = await persistImageUrl(content, 'character-image');
++  patch(node.id, { content: storedContent });
++  // 同步回 library
++  await useLibrary.getState().patchCharacter(charId, { imageUrl: storedContent });
++  return {
++    kind: 'image',
++    model: model.id,
++    prompt: finalPrompt,
++    contentUrl: storedContent,
++    contentUrls: [storedContent],
++    sizeDesc: `${node.settings.ratio ?? '1:1'} · ${node.settings.resolution ?? '1024'} · ${character.name}`,
++  };
++}
++
++async function runGenerateSceneImage(
++  node: GenerateSceneImageNode,
++  patch: PatchFn,
++): Promise<RunResult> {
++  const { apiKey, baseUrl } = loadRuntime();
++  const modelId = normalizeImageModelId(node.settings.model);
++  const model = getModelDef(modelId);
++  if (!model) throw new Error(`未知模型: ${modelId}`);
++  const sceneId = node.settings.sceneId;
++  if (!sceneId) throw new Error('未选择场景');
++  const scene = useLibrary.getState().scenes.find((c) => c.id === sceneId);
++  if (!scene) throw new Error('场景不存在（可能被删除）');
++
++  const promptParts = [scene.prompt || scene.description, node.settings.prompt].filter(Boolean);
++  const finalPrompt = promptParts.join('\n').trim();
++  if (!finalPrompt) throw new Error('场景 prompt/description 与节点 prompt 都为空');
++
++  const vars: Vars = {
++    modelName: model.name,
++    prompt: finalPrompt,
++    n: 1,
++    size: node.settings.resolution ?? '1024x1024',
++    ratio: node.settings.ratio ?? '16:9',
++    quality: 'standard',
++    enableSequential: false,
++  };
++  const result = await generateImage({
++    model,
++    baseUrl,
++    apiKey,
++    vars,
++    ctx: { hasReferenceImages: false, hasMask: false, useJimengLocalFile: false },
++  });
++  const content = imageResultToUrl(result.data[0] ?? {});
++  if (!content) throw new Error('生成结果无 url / b64_json');
++  const storedContent = await persistImageUrl(content, 'scene-image');
++  patch(node.id, { content: storedContent });
++  await useLibrary.getState().patchScene(sceneId, { imageUrl: storedContent });
++  return {
++    kind: 'image',
++    model: model.id,
++    prompt: finalPrompt,
++    contentUrl: storedContent,
++    contentUrls: [storedContent],
++    sizeDesc: `${node.settings.ratio ?? '16:9'} · ${node.settings.resolution ?? '1024'} · ${scene.name}`,
++  };
++}
++
++async function runGenerateCharacterVideo(
++  node: GenerateCharacterVideoNode,
++  nodes: AppNode[],
++  edges: AppEdge[],
++  patch: PatchFn,
++  historyEntryId?: string,
++): Promise<RunResult> {
++  const model = getModelDef(node.settings.model);
++  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
++
++  const { apiKey, baseUrl } = loadRuntime(model);
++  const charId = node.settings.characterId;
++  if (!charId) throw new Error('未选择角色');
++  const character = useLibrary.getState().characters.find((c) => c.id === charId);
++  if (!character) throw new Error('角色不存在');
++
++  const promptParts = [character.prompt || character.description, node.settings.videoPrompt].filter(
++    Boolean,
++  );
++  const prompt = promptParts.join('\n').trim();
++  if (!prompt) throw new Error('prompt 为空');
++
++  const upstream = resolveUpstream(node.id, nodes, edges);
++  const audioUrls =
++    upstream.audioUrls.length > 0
++      ? await prepareAudioUrls(upstream.audioUrls, { baseUrl, apiKey })
++      : [];
++
++  const vars: Vars = {
++    modelName: model.name,
++    prompt,
++    duration: resolveVideoDuration(model.id, node.settings.duration),
++    size: resolveVideoSizeForModel(model.id, node.settings.ratio, node.settings.resolution),
++    ratio: resolveVideoRatio(node.settings.ratio),
++    resolution: resolveVideoResolutionForModel(model.id, node.settings.resolution),
++  };
++  vars.metadata = happyHorseMetadataForModel(
++    model.id,
++    node.settings.ratio,
++    node.settings.resolution,
++  );
++  vars.metadata = mergeVideoMetadata(vars.metadata, audioReferenceMetadata(audioUrls));
++  let seedanceImageUrls: string[] = [];
++  if (character.imageUrl) {
++    const imageUrls = await prepareReferenceImageUrls([character.imageUrl]);
++    seedanceImageUrls = imageUrls;
++    vars.primaryImageUrl = imageUrls[0];
++    vars.imageUrls = imageUrls;
++  }
++  if (isSeedanceVideoModel(model.id)) {
++    const seedanceVars = buildSeedanceVideoVars({
++      modelName: model.name,
++      prompt,
++      duration: vars.duration as string,
++      ratio: vars.ratio as string,
++      resolution: vars.resolution as string,
++      imageUrls: seedanceImageUrls,
++      audioUrls,
++      mode: 'omni-reference',
++    });
++    const url = await runVideoViaBackgroundTask({
++      model,
++      baseUrl,
++      apiKey,
++      vars: seedanceVars,
++      ctx: {
++        hasReferenceImages: seedanceImageUrls.length > 0 || audioUrls.length > 0,
++        hasMask: false,
++        useJimengLocalFile: false,
++      },
++      nodeId: node.id,
++      historyEntryId,
++      modelId: model.id,
++    });
++    if (!url) throw new Error('鐢熸垚缁撴灉鏃?url');
++    patch(node.id, { content: url });
++    return {
++      kind: 'video',
++      model: model.id,
++      prompt,
++      contentUrl: url,
++      sizeDesc: `${seedanceVars.duration}s 路 ${seedanceVars.ratio} 路 ${character.name}`,
++    };
++  }
++  const url = await runVideoViaBackgroundTask({
++    model,
++    baseUrl,
++    apiKey,
++    vars,
++    ctx: {
++      hasReferenceImages: !!character.imageUrl || audioUrls.length > 0,
++      hasMask: false,
++      useJimengLocalFile: false,
++    },
++    nodeId: node.id,
++    historyEntryId,
++    modelId: model.id,
++  });
++  if (!url) throw new Error('生成结果无 url');
++  patch(node.id, { content: url });
++  return {
++    kind: 'video',
++    model: model.id,
++    prompt,
++    contentUrl: url,
++    sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${character.name}`,
++  };
++}
++
++async function runGenerateSceneVideo(
++  node: GenerateSceneVideoNode,
++  nodes: AppNode[],
++  edges: AppEdge[],
++  patch: PatchFn,
++  historyEntryId?: string,
++): Promise<RunResult> {
++  const model = getModelDef(node.settings.model);
++  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
++
++  const { apiKey, baseUrl } = loadRuntime(model);
++  const sceneId = node.settings.sceneId;
++  if (!sceneId) throw new Error('未选择场景');
++  const scene = useLibrary.getState().scenes.find((c) => c.id === sceneId);
++  if (!scene) throw new Error('场景不存在');
++
++  const promptParts = [scene.prompt || scene.description, node.settings.videoPrompt].filter(
++    Boolean,
++  );
++  const prompt = promptParts.join('\n').trim();
++  if (!prompt) throw new Error('prompt 为空');
++
++  const upstream = resolveUpstream(node.id, nodes, edges);
++  const audioUrls =
++    upstream.audioUrls.length > 0
++      ? await prepareAudioUrls(upstream.audioUrls, { baseUrl, apiKey })
++      : [];
++
++  const vars: Vars = {
++    modelName: model.name,
++    prompt,
++    duration: resolveVideoDuration(model.id, node.settings.duration),
++    size: resolveVideoSizeForModel(model.id, node.settings.ratio, node.settings.resolution),
++    ratio: resolveVideoRatio(node.settings.ratio),
++    resolution: resolveVideoResolutionForModel(model.id, node.settings.resolution),
++  };
++  vars.metadata = happyHorseMetadataForModel(
++    model.id,
++    node.settings.ratio,
++    node.settings.resolution,
++  );
++  vars.metadata = mergeVideoMetadata(vars.metadata, audioReferenceMetadata(audioUrls));
++  let seedanceImageUrls: string[] = [];
++  if (scene.imageUrl) {
++    const imageUrls = await prepareReferenceImageUrls([scene.imageUrl]);
++    seedanceImageUrls = imageUrls;
++    vars.primaryImageUrl = imageUrls[0];
++    vars.imageUrls = imageUrls;
++  }
++  if (isSeedanceVideoModel(model.id)) {
++    const seedanceVars = buildSeedanceVideoVars({
++      modelName: model.name,
++      prompt,
++      duration: vars.duration as string,
++      ratio: vars.ratio as string,
++      resolution: vars.resolution as string,
++      imageUrls: seedanceImageUrls,
++      audioUrls,
++      mode: 'omni-reference',
++    });
++    const url = await runVideoViaBackgroundTask({
++      model,
++      baseUrl,
++      apiKey,
++      vars: seedanceVars,
++      ctx: {
++        hasReferenceImages: seedanceImageUrls.length > 0 || audioUrls.length > 0,
++        hasMask: false,
++        useJimengLocalFile: false,
++      },
++      nodeId: node.id,
++      historyEntryId,
++      modelId: model.id,
++    });
++    if (!url) throw new Error('鐢熸垚缁撴灉鏃?url');
++    patch(node.id, { content: url });
++    return {
++      kind: 'video',
++      model: model.id,
++      prompt,
++      contentUrl: url,
++      sizeDesc: `${seedanceVars.duration}s 路 ${seedanceVars.ratio} 路 ${scene.name}`,
++    };
++  }
++  const url = await runVideoViaBackgroundTask({
++    model,
++    baseUrl,
++    apiKey,
++    vars,
++    ctx: {
++      hasReferenceImages: !!scene.imageUrl || audioUrls.length > 0,
++      hasMask: false,
++      useJimengLocalFile: false,
++    },
++    nodeId: node.id,
++    historyEntryId,
++    modelId: model.id,
++  });
++  if (!url) throw new Error('生成结果无 url');
++  patch(node.id, { content: url });
++  return {
++    kind: 'video',
++    model: model.id,
++    prompt,
++    contentUrl: url,
++    sizeDesc: `${node.settings.duration ?? '5s'} · ${node.settings.ratio ?? '16:9'} · ${scene.name}`,
++  };
++}
++
++async function runExtractCharactersScenes(
++  node: ExtractCharactersScenesNode,
++  nodes: AppNode[],
++  edges: AppEdge[],
++): Promise<void> {
++  const model = getModelDef(node.settings.model);
++  if (!model) throw new Error(`未知模型: ${node.settings.model}`);
++
++  const { apiKey, baseUrl } = loadRuntime(model);
++
++  const upstream = resolveUpstream(node.id, nodes, edges);
++  const source = (upstream.prompt || node.settings.sourceText || '').trim();
++  if (!source) throw new Error('源文本为空（连一个 text-node 或粘贴文本）');
++
++  const result = await chatComplete({
++    model,
++    baseUrl,
++    apiKey,
++    messages: [
++      {
++        role: 'system',
++        content:
++          '你是文本分析助手。请从用户提供的小说 / 文本中抽取出现的全部角色和场景。' +
++          '严格输出 JSON（不要任何额外解释，不要 markdown 代码块包裹）：' +
++          '{"characters":[{"name":"...","description":"..."}],"scenes":[{"name":"...","description":"..."}]}',
++      },
++      { role: 'user', content: source },
++    ],
++  });
++  const text = result.choices[0]?.message?.content ?? '';
++  // 尝试从可能含 markdown 围栏的响应里捞 JSON
++  const jsonMatch = text.match(/\{[\s\S]*\}/);
++  if (!jsonMatch) throw new Error('chat 返回未包含 JSON');
++  let parsed: { characters?: unknown; scenes?: unknown };
++  try {
++    parsed = JSON.parse(jsonMatch[0]);
++  } catch {
++    throw new Error('chat 返回的 JSON 解析失败');
++  }
++  const characters = sanitize(parsed.characters);
++  const scenes = sanitize(parsed.scenes);
++  useCanvas.getState().patchSettings<'extract-characters-scenes'>(node.id, { characters, scenes });
++}
++
++function sanitize(raw: unknown): Array<{ name: string; description: string }> {
++  if (!Array.isArray(raw)) return [];
++  return raw
++    .map((x) => {
++      if (!x || typeof x !== 'object') return null;
++      const o = x as Record<string, unknown>;
++      const name = typeof o.name === 'string' ? o.name : '';
++      const description = typeof o.description === 'string' ? o.description : '';
++      if (!name) return null;
++      return { name, description };
++    })
++    .filter((x): x is { name: string; description: string } => x !== null);
++}
++
++async function runCharacterCard(node: CharacterCardNode): Promise<RunResult> {
++  const { apiKey, baseUrl } = loadRuntime();
++  const modelId = normalizeImageModelId(node.settings.model);
++  const model = getModelDef(modelId);
++  if (!model) throw new Error(`未知模型: ${modelId}`);
++
++  const { inputMode, textDescription, referenceImage, viewType, expressions, imageSize } =
++    node.settings;
++
++  // 验证输入
++  if (inputMode === 'text' && !textDescription) {
++    throw new Error('请输入角色描述');
++  }
++  if (inputMode === 'image' && !referenceImage) {
++    throw new Error('请上传参考图片');
++  }
++
++  // 确保图片尺寸满足最小要求（768x768 = 589,824 像素）
++  const safeImageSize = Math.max(768, imageSize);
++
++  // 更新进度
++  useCanvas.getState().patchSettings<'character-card'>(node.id, {
++    isGenerating: true,
++    progress: 0,
++    error: null,
++  });
++
++  try {
++    // Step 1: 生成多视图
++    useCanvas.getState().patchSettings<'character-card'>(node.id, { progress: 10 });
++    const multiViewPrompt = buildMultiViewPrompt(textDescription || '', viewType, inputMode);
++    const multiViewVars: Vars = {
++      modelName: model.name,
++      prompt: multiViewPrompt,
++      n: 1,
++      size: `${safeImageSize * (viewType === 'three' ? 3 : 4)}x${safeImageSize}`,
++      ratio: viewType === 'three' ? '3:1' : '4:1',
++      quality: 'standard',
++      enableSequential: false,
++    };
++
++    // 如果是图片模式，添加参考图
++    if (inputMode === 'image' && referenceImage) {
++      const imageUrls = await prepareReferenceImageUrls([referenceImage]);
++      multiViewVars.imageUrls = imageUrls;
++    }
++
++    const multiViewResult = await generateImage({
++      model,
++      baseUrl,
++      apiKey,
++      vars: multiViewVars,
++      ctx: {
++        hasReferenceImages: inputMode === 'image',
++        hasMask: false,
++        useJimengLocalFile: false,
++      },
++    });
++
++    const multiViewUrl = imageResultToUrl(multiViewResult.data[0] ?? {});
++    if (!multiViewUrl) throw new Error('多视图生成失败');
++    const storedMultiView = await persistImageUrl(multiViewUrl, 'character-multiview');
++
++    useCanvas.getState().patchSettings<'character-card'>(node.id, {
++      multiViewImage: storedMultiView,
++      progress: 30,
++    });
++
++    // Step 2: 生成表情图（使用多视图作为参考）
++    const expressionImages: Partial<Record<ExpressionType, string>> = {};
++    const totalExpressions = expressions.length;
++
++    for (let i = 0; i < totalExpressions; i++) {
++      const expr = expressions[i];
++      const progress = 30 + Math.floor((i / totalExpressions) * 50);
++      useCanvas.getState().patchSettings<'character-card'>(node.id, { progress });
++
++      const exprPrompt = buildExpressionPrompt(
++        textDescription || '',
++        expr,
++        inputMode,
++      );
++      const exprVars: Vars = {
++        modelName: model.name,
++        prompt: exprPrompt,
++        n: 1,
++        size: `${safeImageSize}x${safeImageSize}`,
++        ratio: '1:1',
++        quality: 'standard',
++        enableSequential: false,
++      };
++
++      // 使用多视图作为参考图，保持角色一致性
++      const refImages = inputMode === 'image' && referenceImage
++        ? [referenceImage, storedMultiView]
++        : [storedMultiView];
++      const imageUrls = await prepareReferenceImageUrls(refImages);
++      exprVars.imageUrls = imageUrls;
++
++      const exprResult = await generateImage({
++        model,
++        baseUrl,
++        apiKey,
++        vars: exprVars,
++        ctx: {
++          hasReferenceImages: true,
++          hasMask: false,
++          useJimengLocalFile: false,
++        },
++      });
++
++      const exprUrl = imageResultToUrl(exprResult.data[0] ?? {});
++      if (!exprUrl) throw new Error(`表情 ${expr} 生成失败`);
++      const storedExpr = await persistImageUrl(exprUrl, `character-expr-${expr}`);
++      expressionImages[expr] = storedExpr;
++    }
++
++    useCanvas.getState().patchSettings<'character-card'>(node.id, {
++      expressionImages: expressionImages as Record<ExpressionType, string>,
++      progress: 80,
++    });
++
++    // Step 3: 合成最终角色卡
++    console.log('开始合成角色卡', {
++      multiViewImage: storedMultiView,
++      expressionImages,
++      layout: node.settings,
++    });
++
++    const finalCard = await composeCharacterCard({
++      multiViewImage: storedMultiView,
++      expressionImages: expressionImages as Record<ExpressionType, string>,
++      layout: node.settings,
++    });
++
++    console.log('合成完成，开始持久化');
++
++    const storedFinalCard = await persistImageUrl(finalCard, 'character-card');
++
++    useCanvas.getState().patchSettings<'character-card'>(node.id, {
++      finalCardImage: storedFinalCard,
++      progress: 100,
++      isGenerating: false,
++    });
++
++    useCanvas.getState().patchNode(node.id, { content: storedFinalCard });
++
++    return {
++      kind: 'image',
++      model: model.id,
++      prompt: textDescription || '角色卡',
++      contentUrl: storedFinalCard,
++      sizeDesc: `${viewType === 'three' ? '三视图' : '四视图'} + ${expressions.length}表情`,
++    };
++  } catch (err) {
++    useCanvas.getState().patchSettings<'character-card'>(node.id, {
++      isGenerating: false,
++      error: err instanceof Error ? err.message : String(err),
++    });
++    throw err;
++  }
++}
++
++function buildMultiViewPrompt(
++  description: string,
++  viewType: 'three' | 'four',
++  inputMode?: 'text' | 'image',
++): string {
++  const viewCount = viewType === 'three' ? 'three views' : 'four views';
++  const views =
++    viewType === 'three'
++      ? '(front view, side view, back view)'
++      : '(front view, 3/4 view, side view, back view)';
++
++  if (inputMode === 'image') {
++    return `Character turnaround sheet, ${viewCount} ${views}, same character in different angles, white background, character design, concept art, consistent style, professional character sheet`;
++  }
++
++  return `Character turnaround sheet, ${viewCount} ${views}, ${description}, white background, character design, concept art, same character in different angles, consistent style, professional character sheet`;
++}
++
++function buildExpressionPrompt(
++  description: string,
++  expression: ExpressionType,
++  inputMode?: 'text' | 'image',
++): string {
++  const expressionMap: Record<ExpressionType, string> = {
++    happy: 'happy, smiling',
++    sad: 'sad, crying',
++    angry: 'angry, furious',
++    surprised: 'surprised, shocked',
++    neutral: 'neutral, calm',
++    excited: 'excited, enthusiastic',
++    worried: 'worried, anxious',
++    shy: 'shy, blushing',
++  };
++
++  const exprDesc = expressionMap[expression];
++
++  if (inputMode === 'image') {
++    return `Character portrait, ${exprDesc} expression, close-up face, white background, character design, consistent with reference, emotional expression, same character`;
++  }
++
++  return `Character portrait, ${exprDesc} expression, ${description}, close-up face, white background, character design, emotional expression`;
++}
++
++export function useGenerationTrigger() {
++  const enqueue = useTasks((s) => s.enqueue);
++  const patchNode = useCanvas((s) => s.patchNode);
++
++  return useCallback(
++    (nodeId: NodeId): TriggerResult => {
++      const initialState = useCanvas.getState();
++      const initialNode = initialState.nodes.find((n) => n.id === nodeId);
++      if (initialNode && !isNodeFeatureEnabled(initialNode.kind)) {
++        window.alert(FEATURE_DISABLED_MESSAGE);
++        return { taskId: `disabled-${nodeId}` };
++      }
++      const historyEntry = initialNode
++        ? createPendingHistory(initialNode, initialState.nodes, initialState.edges)
++        : null;
++
++      const taskId = enqueue(nodeId, async () => {
++        const state = useCanvas.getState();
++        const node = state.nodes.find((n) => n.id === nodeId);
++        if (!node) throw new Error('节点不存在');
++        const startedAt = Date.now();
++        let result: RunResult | null = null;
++        try {
++          if (node.kind === 'gen-image') {
++            result = await runImageGen(node, state.nodes, state.edges);
++          } else if (node.kind === 'gen-video') {
++            result = await runVideoGen(
++              node,
++              state.nodes,
++              state.edges,
++              patchNode,
++              historyEntry?.id,
++            );
++          } else if (node.kind === 'video-analyze') {
++            await runVideoAnalyze(node, state.nodes, state.edges);
++          } else if (node.kind === 'generate-character-image') {
++            result = await runGenerateCharacterImage(node, patchNode);
++          } else if (node.kind === 'generate-scene-image') {
++            result = await runGenerateSceneImage(node, patchNode);
++          } else if (node.kind === 'generate-character-video') {
++            result = await runGenerateCharacterVideo(
++              node,
++              state.nodes,
++              state.edges,
++              patchNode,
++              historyEntry?.id,
++            );
++          } else if (node.kind === 'generate-scene-video') {
++            result = await runGenerateSceneVideo(
++              node,
++              state.nodes,
++              state.edges,
++              patchNode,
++              historyEntry?.id,
++            );
++          } else if (node.kind === 'extract-characters-scenes') {
++            await runExtractCharactersScenes(node, state.nodes, state.edges);
++          } else if (node.kind === 'character-card') {
++            result = await runCharacterCard(node);
++          } else {
++            throw new Error(`不支持的触发类型: ${node.kind}`);
++          }
++        } catch (err) {
++          const error = err instanceof Error ? err.message : String(err);
++          if (historyEntry) {
++            void useHistory.getState().update(historyEntry.id, {
++              status: 'failed',
++              durationMs: Date.now() - startedAt,
++              error,
++            });
++          } else if (result === null && isPersistableKind(node.kind)) {
++            void useHistory.getState().push({
++              nodeId,
++              nodeKind: node.kind,
++              kind: 'image',
++              model: 'unknown',
++              status: 'failed',
++              durationMs: Date.now() - startedAt,
++              error,
++            });
++          }
++          throw err;
++        }
++        if (result) {
++          if (node.kind === 'gen-video' && result.kind === 'video' && result.contentUrl) {
++            patchNode(node.id, { content: result.contentUrl });
++          }
++          if (shouldCreateImageCompareNode(node.kind, result)) {
++            createImageCompareResultNode(node, result);
++          }
++          if (shouldCreateVideoPreviewNode(node.kind, result)) {
++            createVideoPreviewResultNode(node, result);
++          }
++          const completed = {
++            kind: result.kind,
++            model: result.model,
++            prompt: result.prompt,
++            content: result.contentUrl,
++            contents: result.contentUrls,
++            sizeDesc: result.sizeDesc,
++            refsCount: result.refsCount,
++            status: 'completed' as const,
++            durationMs: Date.now() - startedAt,
++          };
++          if (historyEntry) {
++            void useHistory.getState().update(historyEntry.id, completed);
++          } else {
++            void useHistory.getState().push({
++              nodeId,
++              nodeKind: node.kind,
++              ...completed,
++            });
++          }
++        }
++      });
++      return { taskId };
++    },
++    [enqueue, patchNode],
++  );
++}
++
++function shouldCreateImageCompareNode(kind: NodeKind, result: RunResult): boolean {
++  return (
++    isNodeFeatureEnabled('image-compare') &&
++    result.kind === 'image' &&
++    IMAGE_RESULT_NODE_KINDS.has(kind) &&
++    !!result.contentUrl
++  );
++}
++
++function shouldCreateVideoPreviewNode(kind: NodeKind, result: RunResult): boolean {
++  return (
++    isNodeFeatureEnabled('preview') &&
++    kind === 'gen-video' &&
++    result.kind === 'video' &&
++    !!result.contentUrl
++  );
++}
++
++function createImageCompareResultNode(source: AppNode, result: RunResult): void {
++  const images = (result.contentUrls?.length ? result.contentUrls : [result.contentUrl]).filter(
++    (url): url is string => !!url,
++  );
++  if (images.length === 0) return;
++  const state = useCanvas.getState();
++  const compareNode = createImageCompareNode(images, { x: 0, y: 0 });
++  const pos = getResultNodePosition(
++    source,
++    state.nodes,
++    state.edges,
++    'image-compare',
++    compareNode.width,
++    compareNode.height,
++  );
++  compareNode.x = pos.x;
++  compareNode.y = pos.y;
++  state.addNode(compareNode);
++  state.addEdge({ id: edgeId(), from: source.id, to: compareNode.id });
++  state.setSelection([source.id, compareNode.id]);
++}
++
++function createVideoPreviewResultNode(source: AppNode, result: RunResult): void {
++  if (!result.contentUrl) return;
++  const state = useCanvas.getState();
++  const hasPreview = state.edges.some((edge) => {
++    if (edge.from !== source.id) return false;
++    const target = state.nodes.find((node) => node.id === edge.to);
++    return (
++      target?.kind === 'preview' &&
++      target.settings.previewType === 'video' &&
++      target.settings.content === result.contentUrl
++    );
++  });
++  if (hasPreview) return;
++
++  const previewNode = createVideoPreviewNode(result.contentUrl, { x: 0, y: 0 });
++  const pos = getResultNodePosition(
++    source,
++    state.nodes,
++    state.edges,
++    'preview',
++    previewNode.width,
++    previewNode.height,
++  );
++  previewNode.x = pos.x;
++  previewNode.y = pos.y;
++  state.addNode(previewNode);
++  state.addEdge({ id: edgeId(), from: source.id, to: previewNode.id });
++  state.setSelection([source.id, previewNode.id]);
++}
++
++function isPersistableKind(kind: string): boolean {
++  return (
++    kind === 'gen-image' ||
++    kind === 'gen-video' ||
++    kind === 'generate-character-image' ||
++    kind === 'generate-scene-image' ||
++    kind === 'generate-character-video' ||
++    kind === 'generate-scene-video'
++  );
++}
 diff --git a/src/hooks/useModels.ts b/src/hooks/useModels.ts
-index 2e41060..64437c3 100644
+index 2e41060..8f6c9bb 100644
 --- a/src/hooks/useModels.ts
 +++ b/src/hooks/useModels.ts
-@@ -21,7 +21,14 @@ export function useModels(modality?: Modality): ModelDef[] {
-     const visible = all.filter((m) => !m.hidden);
-     const filtered = modality ? visible.filter((m) => m.modality === modality) : visible;
-     if (modality === 'image') {
+@@ -1,39 +1,48 @@
+-import { useMemo } from 'react';
+-import { DEFAULT_MODELS } from '@/api/models';
+-import { DEFAULT_IMAGE_MODELS } from '@/api/upstream';
+-import { useModelLibrary } from '@/store/models';
+-import type { Modality, ModelDef } from '@/types/model';
+-
+-/**
+- * 合并 DEFAULT_MODELS + 用户自定义库。
+- * 可选按 modality 过滤。
+- * 用户库变化会触发组件 re-render。
+- */
+-export function useModels(modality?: Modality): ModelDef[] {
+-  const userModels = useModelLibrary((s) => s.userModels);
+-  const modelOverrides = useModelLibrary((s) => s.modelOverrides);
+-  return useMemo(() => {
+-    const defaultModels = DEFAULT_MODELS.map((model) => ({
+-      ...model,
+-      ...modelOverrides[model.id],
+-    }));
+-    const all = [...defaultModels, ...userModels];
+-    const visible = all.filter((m) => !m.hidden);
+-    const filtered = modality ? visible.filter((m) => m.modality === modality) : visible;
+-    if (modality === 'image') {
 -      return filtered.filter((m) => DEFAULT_IMAGE_MODELS.includes(m.id));
+-    }
+-    if (modality === 'video') {
+-      return [...filtered].sort((a, b) => videoModelPriority(a) - videoModelPriority(b));
+-    }
+-    return filtered;
+-  }, [modelOverrides, userModels, modality]);
+-}
+-
+-function videoModelPriority(model: ModelDef): number {
+-  const haystack = `${model.id} ${model.name} ${model.group ?? ''}`.toLowerCase();
+-  if (haystack.includes('happyhorse')) return 0;
+-  if (haystack.includes('kling')) return 1;
+-  if (haystack.includes('seedance')) return 2;
+-  return 3;
+-}
++import { useMemo } from 'react';
++import { DEFAULT_MODELS } from '@/api/models';
++import { DEFAULT_IMAGE_MODELS } from '@/api/upstream';
++import { useModelLibrary } from '@/store/models';
++import type { Modality, ModelDef } from '@/types/model';
++
++/**
++ * 合并 DEFAULT_MODELS + 用户自定义库。
++ * 可选按 modality 过滤。
++ * 用户库变化会触发组件 re-render。
++ */
++export function useModels(modality?: Modality): ModelDef[] {
++  const userModels = useModelLibrary((s) => s.userModels);
++  const modelOverrides = useModelLibrary((s) => s.modelOverrides);
++  return useMemo(() => {
++    const defaultModels = DEFAULT_MODELS.map((model) => ({
++      ...model,
++      ...modelOverrides[model.id],
++    }));
++    const all = [...defaultModels, ...userModels];
++    const visible = all.filter((m) => !m.hidden);
++    const filtered = modality ? visible.filter((m) => m.modality === modality) : visible;
++    if (modality === 'image') {
 +      // 原逻辑只允许白名单里的图片模型出现——这会把用户自己添加的外部图片模型
 +      // 和本地模型都过滤掉。改为：白名单里的 + local provider 的 + 用户添加的。
 +      return filtered.filter(
@@ -1309,43 +5279,119 @@ index 2e41060..64437c3 100644
 +          m.provider === 'local' ||
 +          userModels.some((u) => u.id === m.id),
 +      );
-     }
-     if (modality === 'video') {
-       return [...filtered].sort((a, b) => videoModelPriority(a) - videoModelPriority(b));
-@@ -31,6 +38,8 @@ export function useModels(modality?: Modality): ModelDef[] {
- }
- 
- function videoModelPriority(model: ModelDef): number {
++    }
++    if (modality === 'video') {
++      return [...filtered].sort((a, b) => videoModelPriority(a) - videoModelPriority(b));
++    }
++    return filtered;
++  }, [modelOverrides, userModels, modality]);
++}
++
++function videoModelPriority(model: ModelDef): number {
 +  // 本地模型始终排在最前面——它是零配置可用的默认渠道。
 +  if (model.provider === 'local') return -1;
-   const haystack = `${model.id} ${model.name} ${model.group ?? ''}`.toLowerCase();
-   if (haystack.includes('happyhorse')) return 0;
-   if (haystack.includes('kling')) return 1;
++  const haystack = `${model.id} ${model.name} ${model.group ?? ''}`.toLowerCase();
++  if (haystack.includes('happyhorse')) return 0;
++  if (haystack.includes('kling')) return 1;
++  if (haystack.includes('seedance')) return 2;
++  return 3;
++}
 diff --git a/src/types/model.ts b/src/types/model.ts
-index f5c5409..4147130 100644
+index f5c5409..e085484 100644
 --- a/src/types/model.ts
 +++ b/src/types/model.ts
-@@ -1,6 +1,8 @@
- import type { ProviderAssignment } from './provider';
- 
- export type Provider =
+@@ -1,42 +1,49 @@
+-import type { ProviderAssignment } from './provider';
+-
+-export type Provider =
+-  | 'openai'
+-  | 'jimeng'
+-  | 'midjourney'
+-  | 'qwen'
+-  | 'deepseek'
+-  | 'yunwu'
+-  | 'custom';
+-
+-export type Modality = 'image' | 'video' | 'chat';
+-
+-export interface ModelParameter {
+-  key: string;
+-  label: string;
+-  type: 'text' | 'number' | 'select' | 'boolean';
+-  defaultValue: string | number | boolean;
+-  min?: number;
+-  max?: number;
+-  step?: number;
+-  options?: Array<{ label: string; value: string }>;
+-  description?: string;
+-}
+-
+-export interface ModelDef {
+-  id: string;
+-  name: string;
+-  displayName?: string;
+-  provider: Provider;
+-  modality: Modality;
+-  hidden?: boolean;
+-  supportsEdit?: boolean;
+-  async?: boolean;
+-  ratios?: string[];
+-  resolutions?: string[];
+-  durations?: string[];
+-  defaultImageConcurrency?: number;
+-  group?: string;
+-  parameters?: ModelParameter[];
+-  providerAssignment?: ProviderAssignment;
+-}
++import type { ProviderAssignment } from './provider';
++
++export type Provider =
 +  /** 本地 MiniMax H3（Liblocal 编排器），无需任何 API 配置。 */
 +  | 'local'
-   | 'openai'
-   | 'jimeng'
-   | 'midjourney'
-@@ -9,6 +11,11 @@ export type Provider =
-   | 'yunwu'
-   | 'custom';
- 
++  | 'openai'
++  | 'jimeng'
++  | 'midjourney'
++  | 'qwen'
++  | 'deepseek'
++  | 'yunwu'
++  | 'custom';
++
 +/** 本地渠道不需要 Key/BaseUrl，凭据界面据此跳过它。 */
 +export function isLocalProvider(provider: Provider): boolean {
 +  return provider === 'local';
 +}
 +
- export type Modality = 'image' | 'video' | 'chat';
- 
- export interface ModelParameter {
++export type Modality = 'image' | 'video' | 'chat';
++
++export interface ModelParameter {
++  key: string;
++  label: string;
++  type: 'text' | 'number' | 'select' | 'boolean';
++  defaultValue: string | number | boolean;
++  min?: number;
++  max?: number;
++  step?: number;
++  options?: Array<{ label: string; value: string }>;
++  description?: string;
++}
++
++export interface ModelDef {
++  id: string;
++  name: string;
++  displayName?: string;
++  provider: Provider;
++  modality: Modality;
++  hidden?: boolean;
++  supportsEdit?: boolean;
++  async?: boolean;
++  ratios?: string[];
++  resolutions?: string[];
++  durations?: string[];
++  defaultImageConcurrency?: number;
++  group?: string;
++  parameters?: ModelParameter[];
++  providerAssignment?: ProviderAssignment;
++}
 diff --git a/src/utils/bench.ts b/src/utils/bench.ts
 new file mode 100644
 index 0000000..3f9bbe2
@@ -1456,25 +5502,61 @@ index 0000000..3f9bbe2
 +  console.log('[bench]', JSON.stringify(result));
 +}
 diff --git a/vite.config.ts b/vite.config.ts
-index 8fb34e7..182c020 100644
+index 8fb34e7..167a87a 100644
 --- a/vite.config.ts
 +++ b/vite.config.ts
-@@ -14,11 +14,15 @@ export default defineConfig({
-     port: 5173,
-     strictPort: false,
-     proxy: {
-+      // Liblocal 编排器：托管本地 H3 渠道，并兼容 PinCanvas 原有的 /api 端点。
-+      // 生产构建由编排器同源托管，因此代理只在开发模式生效。
-       '/api': {
+@@ -1,25 +1,29 @@
+-import { defineConfig } from 'vite';
+-import react from '@vitejs/plugin-react';
+-import path from 'node:path';
+-
+-export default defineConfig({
+-  plugins: [react()],
+-  resolve: {
+-    alias: {
+-      '@': path.resolve(__dirname, './src'),
+-    },
+-  },
+-  server: {
+-    host: '127.0.0.1',
+-    port: 5173,
+-    strictPort: false,
+-    proxy: {
+-      '/api': {
 -        target: 'http://127.0.0.1:8787',
-+        target: `http://127.0.0.1:${process.env.LIBLOCAL_PORT ?? 8801}`,
-         changeOrigin: true,
+-        changeOrigin: true,
 -        timeout: 10 * 60_000,
 -        proxyTimeout: 10 * 60_000,
+-      },
+-    },
+-  },
+-});
++import { defineConfig } from 'vite';
++import react from '@vitejs/plugin-react';
++import path from 'node:path';
++
++export default defineConfig({
++  plugins: [react()],
++  resolve: {
++    alias: {
++      '@': path.resolve(__dirname, './src'),
++    },
++  },
++  server: {
++    host: '127.0.0.1',
++    port: 5173,
++    strictPort: false,
++    proxy: {
++      // Liblocal 编排器：托管本地 H3 渠道，并兼容 PinCanvas 原有的 /api 端点。
++      // 生产构建由编排器同源托管，因此代理只在开发模式生效。
++      '/api': {
++        target: `http://127.0.0.1:${process.env.LIBLOCAL_PORT ?? 8801}`,
++        changeOrigin: true,
 +        ws: true,
 +        // 一次视频生成可能跑好几分钟，默认超时会在采样中途掐断连接。
 +        timeout: 30 * 60_000,
 +        proxyTimeout: 30 * 60_000,
-       },
-     },
-   },
++      },
++    },
++  },
++});

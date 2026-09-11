@@ -1,4 +1,4 @@
-# 目标机权重清单：由 modelscope CLI 下载，不经过 git 传输。
+﻿# 目标机权重清单：由 modelscope CLI 下载，不经过 git 传输。
 #
 # dest 是相对 ComfyUI/models 的路径。repo 用 ModelScope 的 <owner>/<name>。
 # 这张表同时是校验表：setup 完成后 doctor.py 会按 dest 逐个核对存在性与大小。
