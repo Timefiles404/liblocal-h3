@@ -88,6 +88,7 @@ async def health(request: web.Request) -> web.Response:
         "plan": {"argv": hardware.build_argv(tuning), "notes": tuning.notes,
                  "summary": hardware.describe(host, tuning),
                  "tuning": tuning.to_dict()},
+        "warnings": [*tuning.notes, *hardware.preflight_memory(host)],
         "models": models,
         "missing": [m.filename for m in config.missing_models()],
         "comfy": mgr.proc.status(),
@@ -226,8 +227,16 @@ async def generate(request: web.Request) -> web.Response:
     if not req.prompt.strip() and not req.first_frame:
         raise web.HTTPBadRequest(text="需要提示词或首帧图片")
 
+    # 内存不足时不要闷头跑：失败会以 1450 / read_file_slice 的形式出现在
+    # 采样中途，看起来像模型坏了。这里给出可操作的提示，但**不阻断**——
+    # 只要当前可用内存够，任务仍能成功。
+    mem_warnings = hardware.preflight_memory(hardware.detect())
+
     job = mgr.submit(kind, req, label=body.get("label") or "")
-    return web.json_response(job.to_dict(), status=202)
+    payload = job.to_dict()
+    if mem_warnings:
+        payload["warnings"] = mem_warnings
+    return web.json_response(payload, status=202)
 
 
 @routes.post("/api/upscale")

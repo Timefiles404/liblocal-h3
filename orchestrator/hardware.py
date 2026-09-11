@@ -149,22 +149,46 @@ def plan_launch(host: HostInfo, *, prefer_disk: bool | None = None) -> LaunchTun
         t.reserve_vram = 0.5
 
     # --- offload strategy ----------------------------------------------
-    # Headroom the OS needs on top of the weight set before RAM caching pays off.
+    # 这里判断的是「权重集能不能常驻内存」。28.2GB 的权重 + 系统自身开销，
+    # 需要约 40GB 内存才谈得上常驻。
     ram_ok_for_resident = host.ram_gb >= _WEIGHT_SET_GB + 12
-    if prefer_disk is None:
-        t.fast_disk = not ram_ok_for_resident
-    else:
+
+    # 但「不能常驻」不等于「应该用 fast-disk」。
+    #
+    # 实测教训（本机 32GB / 5070 Ti Laptop）：32GB < 40.2GB，于是启用了
+    # --fast-disk，结果采样中途报
+    #   GetOverlappedResult failed error=1450  (ERROR_NO_SYSTEM_RESOURCES)
+    #   HostBuffer.read_file_slice failed @ SamplerCustomAdvanced
+    # 原因是物理内存只剩 2GB、已提交 54GB / 上限 56.7GB，内核的非分页池
+    # 被磁盘流式 I/O 打满。fast-disk 适合「内存中等、磁盘很快」的机器，
+    # 但在内存本就贴着上限时会雪上加霜。
+    #
+    # 所以按内存分三档：
+    #   >= 40GB  常驻内存，用 --high-ram
+    #   24-40GB  默认的 RAM 压力缓存，不加额外标志（最稳）
+    #   < 24GB   内存严重不足，才用 fast-disk 赌磁盘比内存换页快
+    if prefer_disk is not None:
         t.fast_disk = prefer_disk
+    elif host.ram_gb < 24:
+        t.fast_disk = True
+    else:
+        t.fast_disk = False
     t.high_ram = ram_ok_for_resident
 
     # Cache headroom: first value is the active-cache threshold in GB. Leave
     # more slack on a RAM-tight box so the cache never pushes us into pagefile.
     if host.ram_gb >= 56:
         t.cache_ram = [10.0]
-    elif host.ram_gb >= 28:
+    elif host.ram_gb >= 40:
         t.cache_ram = [4.0]
+    elif host.ram_gb >= 24:
+        # 贴着上限的机器：缓存留得很小，让 ComfyUI 多卸载而不是攒着
+        t.cache_ram = [1.0]
     else:
-        t.cache_ram = [2.0]
+        t.cache_ram = [0.5]
+
+    # 内存紧张时少开卸载流，降低内核 I/O 并发压力
+    t.async_offload = 2 if host.ram_gb >= 40 else 1
 
     # --- compute ---------------------------------------------------------
     if gpu.supports_ck_kernels:
@@ -183,8 +207,47 @@ def plan_launch(host: HostInfo, *, prefer_disk: bool | None = None) -> LaunchTun
             % (gpu.driver or "未知"))
     if not gpu.is_blackwell:
         t.notes.append("该显卡不支持 NVFP4 原生计算，权重将以模拟方式运行，速度会明显下降。")
-    t.async_offload = 2
     return t
+
+
+def preflight_memory(host: HostInfo, *, need_gb: float | None = None) -> list[str]:
+    """生成前检查内存是否够用，返回需要告诉用户的告警（空列表表示没问题）。
+
+    为什么值得单独做：内存不足的表现不是干净的 OOM，而是采样中途
+    `error=1450 (ERROR_NO_SYSTEM_RESOURCES)` / `HostBuffer.read_file_slice failed`，
+    看起来像模型或代码坏了。提前拦住并说清原因，比事后翻日志强得多。
+    """
+    warnings: list[str] = []
+    need = need_gb if need_gb is not None else _WEIGHT_SET_GB
+
+    if host.ram_gb < need + 4:
+        warnings.append(
+            "本机内存 %.0f GB，而 H3 权重集约 %.0f GB。权重无法常驻内存，"
+            "每次生成都要从磁盘流式加载；若同时开着浏览器、聊天工具等占内存的程序，"
+            "可能中途报 1450（系统资源不足）。建议先关掉一些程序再生成。"
+            % (host.ram_gb, need))
+
+    # 可用内存低于权重集的四分之一时，几乎必然要走页面文件
+    if host.ram_free_gb < need * 0.25:
+        warnings.append(
+            "当前可用内存仅 %.0f GB（建议至少 %.0f GB）。请关闭占用内存较大的程序后重试。"
+            % (host.ram_free_gb, need * 0.25))
+
+    # Windows 的提交上限被打满时，任何大分配都会失败
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        commit_limit = (vm.total + swap.total) / 1024 ** 3
+        if commit_limit < need * 1.5:
+            warnings.append(
+                "系统提交上限约 %.0f GB，偏低（页面文件可能被限制）。"
+                "建议把页面文件设为「系统托管」或加大，否则大模型加载会失败。"
+                % commit_limit)
+    except Exception:
+        pass
+
+    return warnings
 
 
 def build_argv(tuning: LaunchTuning) -> list[str]:
